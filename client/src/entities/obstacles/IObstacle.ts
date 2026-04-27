@@ -1,3 +1,5 @@
+import type { PlayerController } from '../PlayerController';
+
 /**
  * Contrat commun de tous les obstacles du jeu FG.
  *
@@ -14,7 +16,7 @@ export interface IObstacle {
    * Met à jour l'état de l'obstacle pour la frame courante.
    * @param deltaTime Temps écoulé depuis la dernière frame, en SECONDES.
    */
-  update(deltaTime: number): void;
+  update(deltaTime: number, player?: PlayerController | null): void;
 
   /**
    * Libère toutes les ressources créées par cet obstacle

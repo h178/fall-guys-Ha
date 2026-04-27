@@ -54,6 +54,10 @@ export class PlayerController {
   private static readonly MODEL_SCALE = 0.2
 
   // ─── Propriétés privées ─────────────────────────────────────────────
+  public conveyorVelocity: Vector3 = Vector3.Zero();
+  public isStunned: boolean = false;
+  private stunTimer: number = 0;
+
   private scene: Scene;
   private camera: ArcRotateCamera;
   private mesh: Mesh;
@@ -213,6 +217,15 @@ export class PlayerController {
 
   // ─── Boucle de mise à jour (publique) ──────────────────────────────
 
+  public applyImpulse(direction: Vector3): void {
+    this.aggregate.body.applyImpulse(direction, this.mesh.getAbsolutePosition());
+  }
+
+  public stun(duration: number): void {
+    this.isStunned = true;
+    this.stunTimer = duration;
+  }
+
   /**
    * Doit être appelée à chaque frame depuis la render loop.
    * @param _deltaTime Temps écoulé depuis la dernière frame, en SECONDES.
@@ -235,11 +248,22 @@ export class PlayerController {
       return;  // ← ne pas exécuter mouvement/saut/caméra sur ce frame
     }
 
+    // Gestion du Stun : on laisse Havok gérer la trajectoire
+    if (this.isStunned) {
+      this.stunTimer -= _deltaTime;
+      if (this.stunTimer <= 0) {
+        this.isStunned = false;
+      }
+      this.followCamera();
+      this.updateAnimation();
+      return; 
+    }
+
     // ─ Mouvement / Saut — guardé par inputEnabled ──────────────────────
     // Au menu (inputEnabled = false), le joueur reste immobile.
     // La caméra continue de le suivre pour l'afficher correctement.
     if (this.inputEnabled) {
-      this.applyMovement();
+      this.applyMovement(_deltaTime);
       this.applyJump();
     }
 
@@ -273,7 +297,7 @@ export class PlayerController {
    * lors du déplacement horizontal. Écraser Y annulerait la gravité
    * Havok et le saut en cours.
    */
-  private applyMovement(): void {
+  private applyMovement(_deltaTime: number): void {
     // 1. Capturer les inputs bruts
     let inputZ = 0;
     let inputX = 0;
@@ -282,13 +306,9 @@ export class PlayerController {
     if (this.inputMap['KeyA']) inputX = -1;
     if (this.inputMap['KeyD']) inputX = 1;
 
-    // 2. Si aucun input → vélocité horizontale à 0, préserver Y
+    // 2. Calculer la direction de base
     if (inputZ === 0 && inputX === 0) {
-      const currentVel = this.aggregate.body.getLinearVelocity();
-      this.aggregate.body.setLinearVelocity(
-        new Vector3(0, currentVel.y, 0)
-      );
-      return;  // pas de mouvement = pas de rotation à calculer
+      // Pas d'input → on ne génère pas de mouvement propre, mais on préserve le conveyor
     }
 
     // 3. Calculer les vecteurs forward/right depuis camera.alpha
@@ -300,20 +320,41 @@ export class PlayerController {
     const moveDir = forward.scale(inputZ).add(right.scale(inputX));
 
     // 5. Normaliser (la diagonale serait ~1.41× sinon)
-    moveDir.normalize();
+    if (moveDir.lengthSquared() > 0) {
+      moveDir.normalize();
+    }
 
-    // 6. Appliquer la vélocité (préserver Y pour gravité/saut)
+    // 6. Appliquer la vélocité avec ANTI-SNAP (Lerp) et CONVEYOR
     const currentVel = this.aggregate.body.getLinearVelocity();
-    this.aggregate.body.setLinearVelocity(
-      new Vector3(
-        moveDir.x * PlayerController.MOVE_SPEED,
-        currentVel.y,  // ← Gravité et vélocité de saut préservées
-        moveDir.z * PlayerController.MOVE_SPEED
-      )
-    );
+    
+    const targetVelX = moveDir.x * PlayerController.MOVE_SPEED + this.conveyorVelocity.x;
+    const targetVelZ = moveDir.z * PlayerController.MOVE_SPEED + this.conveyorVelocity.z;
 
-    // 7. Rotation du mesh vers la direction du mouvement
-    this.applyRotation(moveDir);
+    let newVx = targetVelX;
+    let newVz = targetVelZ;
+
+    // Calcul des vitesses horizontales carrées
+    const currentSpeedSq = currentVel.x * currentVel.x + currentVel.z * currentVel.z;
+    const targetSpeedSq = targetVelX * targetVelX + targetVelZ * targetVelZ;
+    const normalSpeedSq = PlayerController.MOVE_SPEED * PlayerController.MOVE_SPEED;
+
+    // Si le joueur va très vite (saut champignon) et qu'on essaie de ralentir → ANTI-SNAP
+    if (currentSpeedSq > targetSpeedSq && currentSpeedSq > normalSpeedSq * 1.5) {
+      // Décélération/frottement doux au lieu d'un écrasement brutal
+      const friction = Math.min(_deltaTime * 3, 1);
+      newVx = currentVel.x + (targetVelX - currentVel.x) * friction;
+      newVz = currentVel.z + (targetVelZ - currentVel.z) * friction;
+    }
+
+    this.aggregate.body.setLinearVelocity(
+      new Vector3(newVx, currentVel.y, newVz)
+    );
+    this.conveyorVelocity.setAll(0); // Reset systématique
+
+    // 7. Rotation du mesh vers la direction du mouvement (seulement si input actif)
+    if (moveDir.lengthSquared() > 0) {
+      this.applyRotation(moveDir);
+    }
   }
 
   /**

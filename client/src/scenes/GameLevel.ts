@@ -13,6 +13,8 @@ import {
 import { PlayerController } from '../entities/PlayerController';
 import type { IObstacle } from '../entities/obstacles/IObstacle';
 import { RotatingHammer } from '../entities/obstacles/RotatingHammer';
+import { BouncyMushroom } from '../entities/obstacles/BouncyMushroom';
+import { RotatingLily } from '../entities/obstacles/RotatingLily';
 import { MaterialSystem } from '../core/MaterialSystem';
 import { NetworkManager } from '../network/NetworkManager';
 import { UIManager } from '../ui/UIManager';
@@ -249,6 +251,9 @@ export class GameLevel {
 
     shadowGenerator?.addShadowCaster(hammer.getArmMesh(), false);
     shadowGenerator?.addShadowCaster(hammer.getPillarMesh(), false);
+
+    this.obstacles.push(new RotatingLily(this.scene, new Vector3(0, 0, 10)));
+    this.obstacles.push(new BouncyMushroom(this.scene, new Vector3(3, 0, 15)));
   }
 
   /**
@@ -332,7 +337,7 @@ export class GameLevel {
 
       // Les obstacles tournent dans TOUS les états (ambiance)
       for (const obstacle of this.obstacles) {
-        obstacle.update(dt);
+        obstacle.update(dt, this.player);
       }
 
       // ─ RÉSEAU : interpolation des joueurs distants ──────────

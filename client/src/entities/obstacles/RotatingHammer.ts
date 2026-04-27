@@ -9,8 +9,9 @@ import {
   PhysicsMotionType,
   PhysicsShapeCylinder,
 } from '@babylonjs/core';
-import type { IObstacle } from './IObstacle';
 import { MaterialSystem } from '../../core/MaterialSystem';
+import type { PlayerController } from '../PlayerController';
+import type { IObstacle } from './IObstacle';
 
 /**
  * Marteau rotatif — obstacle dynamique de type Fall Guys.
@@ -42,7 +43,6 @@ export class RotatingHammer implements IObstacle {
   private static readonly PILLAR_DIAMETER = 0.6;  // diamètre du pilier
   private static readonly ARM_LENGTH      = 6;    // longueur totale du bras
   private static readonly ARM_HEIGHT      = 1;    // épaisseur verticale du bras
-  private static readonly ARM_DEPTH       = 1;    // profondeur du bras
   private static readonly ROTATION_SPEED  = 1.5;  // radians/seconde ≈ 1 tour/4s
 
   // ─── Propriétés privées ─────────────────────────────────────────────
@@ -208,7 +208,7 @@ export class RotatingHammer implements IObstacle {
    *  - NE PAS utiliser setTargetTransform() : on met à jour le TN directement,
    *    disablePreStep=false s'occupe de la synchronisation physique.
    */
-  update(deltaTime: number): void {
+  update(deltaTime: number, _player?: PlayerController | null): void {
     const angle     = RotatingHammer.ROTATION_SPEED * deltaTime;
     const increment = Quaternion.RotationAxis(Vector3.Up(), angle);
 
