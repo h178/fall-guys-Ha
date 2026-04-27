@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FG — Fall Guys-like Multiplayer Game</title>
+    <!-- Fredoka One : police arcade arrondie — chargée avant le CSS pour éviter le FOUT -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap" rel="stylesheet">
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #0a051e;
+      }
+      #renderCanvas {
+        width: 100%;
+        height: 100%;
+        touch-action: none; /* empêche scroll/zoom sur mobile */
+        outline: none;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="renderCanvas"></canvas>
+
+    <!-- UI Overlay — superposé au canvas via position:absolute -->
+    <div id="ui-layer">
+
+      <!-- ── Menu Principal ───────────────────────────────────────── -->
+      <div id="main-menu">
+        <h1>FALL GUYS</h1>
+        <p class="subtitle">Multijoueur 3D</p>
+        <button id="btn-play">JOUER !</button>
+      </div>
+
+      <!-- ── HUD (caché par défaut, UIManager.showHUD() → visible) ── -->
+      <div id="hud">
+        <div id="timer">00:00.00</div>
+        <div id="victory-message">QUALIFIÉ !</div>
+      </div>
+
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

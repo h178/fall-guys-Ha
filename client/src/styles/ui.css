@@ -1,0 +1,165 @@
+/* ═══════════════════════════════════════════════════════════════
+   FG — UI Overlay CSS
+   Palette Fall Guys arcade : rose, cyan, jaune, violet
+   ═══════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap');
+
+/* ─── Variables ────────────────────────────────────────────────── */
+:root {
+  --fg-pink:   #FF5C8A;
+  --fg-cyan:   #00E5FF;
+  --fg-yellow: #FFD600;
+  --fg-purple: #7C4DFF;
+  --fg-dark:   rgba(10, 5, 30, 0.88);
+  --fg-white:  #FFFFFF;
+}
+
+/* ─── Layer racine ──────────────────────────────────────────────── */
+/*
+  pointer-events: none → le layer ne bloque PAS le canvas 3D.
+  Seuls les enfants avec pointer-events: auto (menu, bouton)
+  interceptent les événements souris/clavier.
+*/
+#ui-layer {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 10;
+  font-family: 'Fredoka One', cursive;
+  user-select: none;
+}
+
+/* ─── Menu Principal ────────────────────────────────────────────── */
+#main-menu {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 2rem;
+  /* pointer-events: auto → le menu intercepte les clics (bloque le canvas) */
+  pointer-events: auto;
+  background: var(--fg-dark);
+  backdrop-filter: blur(4px);
+}
+
+#main-menu h1 {
+  font-size: clamp(2.5rem, 8vw, 5rem);
+  color: var(--fg-yellow);
+  text-shadow:
+    0 4px 12px rgba(255, 214, 0, 0.45),
+    0 0  50px rgba(255, 92, 138, 0.35),
+    3px 3px 0   rgba(124, 77, 255, 0.6);
+  letter-spacing: 6px;
+  text-transform: uppercase;
+  margin: 0;
+  animation: titleFloat 3s ease-in-out infinite;
+}
+
+@keyframes titleFloat {
+  0%, 100% { transform: translateY(0);    }
+  50%       { transform: translateY(-8px); }
+}
+
+/* Sous-titre */
+#main-menu .subtitle {
+  font-size: clamp(0.9rem, 2.5vw, 1.2rem);
+  color: var(--fg-cyan);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  opacity: 0.85;
+  margin: -1.2rem 0 0;
+}
+
+/* ─── Bouton JOUER ──────────────────────────────────────────────── */
+#btn-play {
+  font-family: 'Fredoka One', cursive;
+  font-size: clamp(1.2rem, 3vw, 1.8rem);
+  padding: 0.9rem 3rem;
+  background: linear-gradient(135deg, var(--fg-pink) 0%, var(--fg-purple) 100%);
+  color: var(--fg-white);
+  border: none;
+  border-radius: 50px;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow:
+    0 6px 20px rgba(255, 92, 138, 0.45),
+    0 0  0 3px rgba(255, 255, 255, 0.1) inset;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  animation: btnPulse 2s ease-in-out infinite;
+  outline: none;
+}
+
+#btn-play:hover {
+  transform: scale(1.1) translateY(-2px);
+  box-shadow:
+    0 10px 30px rgba(255, 92, 138, 0.65),
+    0 0  0 3px rgba(255, 255, 255, 0.2) inset;
+  animation: none; /* stoppe le pulse au hover */
+}
+
+#btn-play:active {
+  transform: scale(0.97) translateY(1px);
+}
+
+@keyframes btnPulse {
+  0%, 100% { transform: scale(1);    box-shadow: 0 6px 20px rgba(255, 92, 138, 0.45); }
+  50%       { transform: scale(1.06); box-shadow: 0 8px 28px rgba(255, 92, 138, 0.65); }
+}
+
+/* ─── HUD (affiché pendant le gameplay) ─────────────────────────── */
+#hud {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  display: none;           /* caché par défaut, showHUD() → 'block' */
+  pointer-events: none;    /* le HUD ne bloque pas le canvas */
+}
+
+/* ─── Chronomètre ───────────────────────────────────────────────── */
+#timer {
+  position: absolute;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: clamp(1.4rem, 3vw, 2.2rem);
+  color: var(--fg-white);
+  background: var(--fg-dark);
+  padding: 0.5rem 1.8rem;
+  border-radius: 40px;
+  border: 2px solid var(--fg-cyan);
+  box-shadow:
+    0 0 12px rgba(0, 229, 255, 0.3),
+    0 4px 12px rgba(0, 0, 0, 0.5);
+  letter-spacing: 2px;
+  text-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
+  white-space: nowrap;
+}
+
+/* ─── Message Victoire ──────────────────────────────────────────── */
+#victory-message {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  /* État initial : invisible et réduit */
+  transform: translate(-50%, -50%) scale(0);
+  font-size: clamp(2rem, 7vw, 4.5rem);
+  color: var(--fg-yellow);
+  text-shadow:
+    0 4px 20px rgba(255, 214, 0, 0.6),
+    0 0  60px rgba(255, 92, 138, 0.4),
+    3px 3px 0  rgba(124, 77, 255, 0.5);
+  letter-spacing: 8px;
+  text-transform: uppercase;
+  /* Transition bounce : cubic-bezier overshoots puis revient */
+  transition: transform 0.55s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* Classe ajoutée par UIManager.showVictory() → déclenche l'animation */
+#victory-message.visible {
+  transform: translate(-50%, -50%) scale(1);
+}
