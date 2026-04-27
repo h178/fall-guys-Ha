@@ -8,7 +8,6 @@ import {
   PhysicsShapeCylinder,
 } from '@babylonjs/core';
 import type { IObstacle } from './IObstacle';
-import type { PlayerController } from '../PlayerController';
 import { MaterialSystem } from '../../core/MaterialSystem';
 import { StandardMaterial, Color3 } from '@babylonjs/core';
 
@@ -49,13 +48,23 @@ export class BouncyMushroom implements IObstacle {
     this.body.shape = this.shape;
   }
 
-  update(dt: number, player?: PlayerController | null): void {
+  update(dt: number, players?: { mesh: Mesh }[]): void {
+    let player: any = null;
+    if (players) {
+       for (const p of players) {
+          // Identify local player via applyImpulse
+          if ('applyImpulse' in p) {
+             player = p;
+             break;
+          }
+       }
+    }
     if (!player) return;
     if (this.cooldown > 0) this.cooldown -= dt;
     
-    if (this.cooldown <= 0 && this.capMesh.intersectsMesh(player.getMesh(), true)) {
+    if (this.cooldown <= 0 && this.capMesh.intersectsMesh(player.mesh || player.getMesh(), true)) {
       this.cooldown = 0.5;
-      const toPlayer = player.getMesh().position.subtract(this.pivot.position);
+      const toPlayer = (player.mesh || player.getMesh()).position.subtract(this.pivot.position);
       toPlayer.y = 0;
       toPlayer.normalize();
       toPlayer.y = 1.5; // vecteur ascendant pour l'effets bump

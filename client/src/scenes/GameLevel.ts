@@ -15,6 +15,8 @@ import type { IObstacle } from '../entities/obstacles/IObstacle';
 import { RotatingHammer } from '../entities/obstacles/RotatingHammer';
 import { BouncyMushroom } from '../entities/obstacles/BouncyMushroom';
 import { RotatingLily } from '../entities/obstacles/RotatingLily';
+import { Seesaw } from '../entities/obstacles/Seesaw';
+import { PendulumVine } from '../entities/obstacles/PendulumVine';
 import { MaterialSystem } from '../core/MaterialSystem';
 import { NetworkManager } from '../network/NetworkManager';
 import { UIManager } from '../ui/UIManager';
@@ -254,6 +256,8 @@ export class GameLevel {
 
     this.obstacles.push(new RotatingLily(this.scene, new Vector3(0, 0, 10)));
     this.obstacles.push(new BouncyMushroom(this.scene, new Vector3(3, 0, 15)));
+    this.obstacles.push(new Seesaw(this.scene, new Vector3(-4, 0, 20)));
+    this.obstacles.push(new PendulumVine(this.scene, new Vector3(4, 0, 25)));
   }
 
   /**
@@ -335,9 +339,20 @@ export class GameLevel {
       // PlayerController gère OOB/respawn + caméra même au menu/WON
       this.player?.update(dt);
 
-      // Les obstacles tournent dans TOUS les états (ambiance)
+      // Créer la liste des joueurs physiques dans la scène
+      const physicalPlayers: { mesh: Mesh }[] = [];
+      if (this.player) physicalPlayers.push(this.player);
+
+      // Ajouter les joueurs distants
+      if (this.network) {
+        this.network.getRemotePlayers().forEach((rp: any) => {
+          if (rp.mesh) physicalPlayers.push(rp);
+        });
+      }
+
+      // Passer la liste complète aux obstacles
       for (const obstacle of this.obstacles) {
-        obstacle.update(dt, this.player);
+        obstacle.update(dt, physicalPlayers);
       }
 
       // ─ RÉSEAU : interpolation des joueurs distants ──────────

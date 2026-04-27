@@ -10,7 +10,6 @@ import {
   PhysicsShapeCylinder,
 } from '@babylonjs/core';
 import { MaterialSystem } from '../../core/MaterialSystem';
-import type { PlayerController } from '../PlayerController';
 import type { IObstacle } from './IObstacle';
 
 /**
@@ -208,7 +207,7 @@ export class RotatingHammer implements IObstacle {
    *  - NE PAS utiliser setTargetTransform() : on met à jour le TN directement,
    *    disablePreStep=false s'occupe de la synchronisation physique.
    */
-  update(deltaTime: number, _player?: PlayerController | null): void {
+  update(deltaTime: number, _players?: { mesh: Mesh }[]): void {
     const angle     = RotatingHammer.ROTATION_SPEED * deltaTime;
     const increment = Quaternion.RotationAxis(Vector3.Up(), angle);
 

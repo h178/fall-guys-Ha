@@ -10,7 +10,6 @@ import {
   PhysicsShapeCylinder,
 } from '@babylonjs/core';
 import type { IObstacle } from './IObstacle';
-import type { PlayerController } from '../PlayerController';
 import { MaterialSystem } from '../../core/MaterialSystem';
 
 export class RotatingLily implements IObstacle {
@@ -42,20 +41,27 @@ export class RotatingLily implements IObstacle {
     this.body.disablePreStep = false;
   }
 
-  update(dt: number, player?: PlayerController | null): void {
+  update(dt: number, players?: { mesh: Mesh }[]): void {
     const angle = RotatingLily.SPEED * dt;
     const increment = Quaternion.RotationAxis(Vector3.Up(), angle);
     this.pivot.rotationQuaternion = this.pivot.rotationQuaternion!.multiply(increment);
 
-    if (player && this.mesh.intersectsMesh(player.getMesh(), true)) {
-      const toPlayer = player.getMesh().position.subtract(this.pivot.position);
+    let player: any = null;
+    if (players) {
+       for (const p of players) {
+          if ('conveyorVelocity' in p) {
+             player = p;
+             break;
+          }
+       }
+    }
+
+    if (player && this.mesh.intersectsMesh(player.mesh || player.getMesh(), true)) {
+      const toPlayer = (player.mesh || player.getMesh()).position.subtract(this.pivot.position);
       toPlayer.y = 0;
       // Force de rotation convertie en vélocité de tapis roulant
       const tangent = Vector3.Cross(new Vector3(0, Math.sign(RotatingLily.SPEED), 0), toPlayer).normalize();
       player.conveyorVelocity = tangent.scale(1.2 * Math.abs(RotatingLily.SPEED)); // (valeur ajustée)
-    } else if (player) {
-      // Note: Le PlayerController reset déjà this.conveyorVelocity.setAll(0) à chaque frame dans applyMovement(),
-      // donc cette approche est sécurisée même si plusieurs tapis s'enchainent.
     }
   }
 

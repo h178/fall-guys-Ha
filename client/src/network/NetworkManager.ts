@@ -283,7 +283,14 @@ export class NetworkManager {
     }
   }
 
-  // ─── Envoi de transform ───────────────────────────────
+  /**
+   * Retourne la liste des joueurs distants.
+   */
+  getRemotePlayers(): any[] {
+    return Array.from(this.remotePlayers.values());
+  }
+
+  // ─── Sérialisation du Transform ────────────────────────
 
   /**
    * Envoie la position ET la rotation du joueur local au serveur.

@@ -1,5 +1,4 @@
-import type { PlayerController } from '../PlayerController';
-
+import type { Mesh } from '@babylonjs/core';
 /**
  * Contrat commun de tous les obstacles du jeu FG.
  *
@@ -15,8 +14,9 @@ export interface IObstacle {
   /**
    * Met à jour l'état de l'obstacle pour la frame courante.
    * @param deltaTime Temps écoulé depuis la dernière frame, en SECONDES.
+   * @param players Liste de tous les joueurs (local + distants) pour la physique
    */
-  update(deltaTime: number, player?: PlayerController | null): void;
+  update(deltaTime: number, players?: { mesh: Mesh }[]): void;
 
   /**
    * Libère toutes les ressources créées par cet obstacle

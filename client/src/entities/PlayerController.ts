@@ -60,7 +60,7 @@ export class PlayerController {
 
   private scene: Scene;
   private camera: ArcRotateCamera;
-  private mesh: Mesh;
+  public mesh: Mesh;
   private aggregate: PhysicsAggregate;
 
   /** Point de réapparition. Cloné au constructeur pour éviter les mutations. */
