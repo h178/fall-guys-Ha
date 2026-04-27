@@ -58,6 +58,9 @@ export class PlayerController {
   public isStunned: boolean = false;
   private stunTimer: number = 0;
 
+  public isQualified: boolean = false;
+  private trauma: number = 0;
+
   private scene: Scene;
   private camera: ArcRotateCamera;
   public mesh: Mesh;
@@ -126,6 +129,7 @@ export class PlayerController {
 
     this.loadModel();
     this.createDustSystem();
+    this.camera.alpha = -Math.PI / 2;
   }
 
   // ─── Méthodes d'initialisation (privées) ───────────────────────────
@@ -224,6 +228,8 @@ export class PlayerController {
   public stun(duration: number): void {
     this.isStunned = true;
     this.stunTimer = duration;
+    // Plafonner le trauma à 1.0 pour éviter que la caméra ne s'envole sur Saturne
+    this.trauma = Math.min(1.0, this.trauma + 0.8);
   }
 
   /**
@@ -256,7 +262,7 @@ export class PlayerController {
       }
       this.followCamera();
       this.updateAnimation();
-      return; 
+      return;
     }
 
     // ─ Mouvement / Saut — guardé par inputEnabled ──────────────────────
@@ -326,7 +332,7 @@ export class PlayerController {
 
     // 6. Appliquer la vélocité avec ANTI-SNAP (Lerp) et CONVEYOR
     const currentVel = this.aggregate.body.getLinearVelocity();
-    
+
     const targetVelX = moveDir.x * PlayerController.MOVE_SPEED + this.conveyorVelocity.x;
     const targetVelZ = moveDir.z * PlayerController.MOVE_SPEED + this.conveyorVelocity.z;
 
@@ -428,7 +434,18 @@ export class PlayerController {
    * le centre du personnage à chaque frame.
    */
   private followCamera(): void {
-    this.camera.target = this.mesh.position;
+    // Réduire le trauma progressivement
+    if (this.trauma > 0) {
+      this.trauma = Math.max(0, this.trauma - this.scene.getEngine().getDeltaTime() / 1000);
+    }
+    // Application 
+    const shake = this.trauma * this.trauma;
+    const shakeX = (Math.random() - 0.5) * shake * 1.5;
+    const shakeY = (Math.random() - 0.5) * shake * 1.5;
+    const shakeZ = (Math.random() - 0.5) * shake * 1.5;
+
+    // La target originelle de la camera était this.mesh.position, on y ajoute le shake
+    this.camera.target = this.mesh.position.add(new Vector3(shakeX, 2 + shakeY, shakeZ));
   }
 
   // ─── Détection de sol (privée) ──────────────────────────────────────
@@ -574,8 +591,7 @@ export class PlayerController {
       // pour la faire face à la direction de mouvement.
       // ⚠️ Cette rotation est en Euler et s'applique uniquement au child.
       //    La capsule PARENT utilise rotationQuaternion — aucun conflit,
-      //    Babylon résout correctement parent(quat) × enfant(euler).
-      rootNode.rotation.y = Math.PI;
+      rootNode.rotation.y = 0;
 
       // ─ OFFSET VERTICAL ──────────────────────────────────────────────
       // Décaler vers le bas pour que les pieds de l'avatar s'alignent
@@ -602,19 +618,19 @@ export class PlayerController {
    */
   private createDustSystem(): void {
     const dust = new ParticleSystem('runDust', 30, this.scene);
-    dust.emitter        = this.mesh;
-    dust.minEmitBox     = new Vector3(-0.3, -PlayerController.CAPSULE_HEIGHT / 2, -0.3);
-    dust.maxEmitBox     = new Vector3( 0.3, -PlayerController.CAPSULE_HEIGHT / 2,  0.3);
-    dust.color1         = new Color4(0.45, 0.30, 0.15, 0.6);  // marron terre
-    dust.color2         = new Color4(0.30, 0.50, 0.10, 0.4);  // vert feuille
-    dust.minSize        = 0.05;
-    dust.maxSize        = 0.15;
-    dust.minLifeTime    = 0.2;
-    dust.maxLifeTime    = 0.5;
-    dust.emitRate       = 0;  // désactivé par défaut
-    dust.gravity        = new Vector3(0, -2, 0);
-    dust.direction1     = new Vector3(-0.5, 0.3, -0.5);
-    dust.direction2     = new Vector3( 0.5, 0.8,  0.5);
+    dust.emitter = this.mesh;
+    dust.minEmitBox = new Vector3(-0.3, -PlayerController.CAPSULE_HEIGHT / 2, -0.3);
+    dust.maxEmitBox = new Vector3(0.3, -PlayerController.CAPSULE_HEIGHT / 2, 0.3);
+    dust.color1 = new Color4(0.45, 0.30, 0.15, 0.6);  // marron terre
+    dust.color2 = new Color4(0.30, 0.50, 0.10, 0.4);  // vert feuille
+    dust.minSize = 0.05;
+    dust.maxSize = 0.15;
+    dust.minLifeTime = 0.2;
+    dust.maxLifeTime = 0.5;
+    dust.emitRate = 0;  // désactivé par défaut
+    dust.gravity = new Vector3(0, -2, 0);
+    dust.direction1 = new Vector3(-0.5, 0.3, -0.5);
+    dust.direction2 = new Vector3(0.5, 0.8, 0.5);
     dust.start();  // démarrer le système (emitRate=0 → aucune particule jusqu'à Run)
     this.dustSystem = dust;
   }
@@ -636,7 +652,7 @@ export class PlayerController {
 
       if (horizSpeed > 0.1) {
         targetAnim = this.animRun;
-        wantDust   = true;
+        wantDust = true;
       } else {
         targetAnim = this.animIdle;
       }

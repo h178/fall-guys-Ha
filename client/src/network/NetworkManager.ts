@@ -52,8 +52,12 @@ export class NetworkManager {
 
   // ─── Propriétés ─────────────────────────────────────────
   private scene: Scene;
-  private room: Room | null = null;
+  public room: Room | null = null;
   private remotePlayers: Map<string, RemotePlayer> = new Map();
+
+  public onQualified: (isLocal: boolean, rank: number) => void = () => {};
+  public onStatusChange: (status: string) => void = () => {};
+  public onCountdownChange: (count: number) => void = () => {};
 
   /** Dernière position envoyée au serveur — pour le seuil de distance */
   private lastSentPosition: Vector3 = Vector3.Zero();
@@ -113,6 +117,18 @@ export class NetworkManager {
     if (!this.room) return;
 
     const room = this.room;  // capture pour les closures
+
+    room.state.listen("status", (newStatus: string) => {
+      this.onStatusChange(newStatus);
+    });
+    room.state.listen("countdown", (newCount: number) => {
+      this.onCountdownChange(newCount);
+    });
+
+    room.state.winners.onAdd((sessionId: string, index: number) => {
+      const isLocal = sessionId === room.sessionId;
+      this.onQualified(isLocal, index + 1);
+    });
 
     // ─ Nouveau joueur ──────────────────────────────────
     room.state.players.onAdd((player: any, sessionId: string) => {

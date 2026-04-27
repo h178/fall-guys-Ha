@@ -1,6 +1,7 @@
 import './styles/ui.css';
 import { Game } from './core/Game';
 import { GameLevel } from './scenes/GameLevel';
+import { LEVEL_SPACE } from './scenes/LevelConfig';
 
 // PhysicsTestScene.ts conservé dans src/scenes/ pour debug futur.
 // RotatingHammer, PlayerController, sol → tout dans GameLevel.
@@ -15,7 +16,7 @@ import { GameLevel } from './scenes/GameLevel';
   const camera = game.getCamera();
   if (!camera) throw new Error('Camera not initialized — appeler setupCamera() avant GameLevel');
 
-  const level = new GameLevel(game.getScene());
+  const level = new GameLevel(game.getScene(), LEVEL_SPACE);
   level.setup(camera, game.getShadowGenerator());
 
   game.start();

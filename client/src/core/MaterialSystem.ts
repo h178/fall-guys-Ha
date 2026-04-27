@@ -8,6 +8,7 @@ import {
   DynamicTexture,
   Mesh,
 } from '@babylonjs/core';
+import type { LevelConfig } from '../scenes/LevelConfig';
 
 /**
  * Système de matériaux centralisé pour FG.
@@ -147,14 +148,60 @@ export class MaterialSystem {
 
   /**
    * Applique un fond de ciel violet/bleu profond à la scène.
-   * Utilise scene.clearColor (RGBA) — pas de skybox mesh pour économiser
-   * des draw calls. Cohérent avec la palette arcade.
-   *
-   * Note : scene.clearColor attend Color4 (RGBA), pas Color3.
    */
   static applySkyColor(scene: Scene): void {
     // Bleu ciel diurne (thème forêt/jungle)
     scene.clearColor = new Color4(0.53, 0.81, 0.92, 1.0);
+  }
+
+  /**
+   * Applique la couleur du ciel selon la config de niveau.
+   */
+  static applyThemeSkyColor(scene: Scene, config: LevelConfig): void {
+    const c = config.skyColor;
+    scene.clearColor = new Color4(c.r, c.g, c.b, c.a);
+  }
+
+  // ─── Thème Space ────────────────────────────────────────────────
+
+  /** Plateforme spatiale : PBR noir brillant avec damier sombre. */
+  static createSpacePlatformMaterial(scene: Scene): PBRMaterial {
+    const mat = new PBRMaterial('mat_space_platform', scene);
+    mat.albedoColor = new Color3(0.08, 0.08, 0.12);
+    mat.metallic    = 0.8;
+    mat.roughness   = 0.2;
+
+    // Damier sombre en DynamicTexture
+    const texSize  = 512;
+    const cellCount = 8;
+    const cellSize  = texSize / cellCount;
+    const dynTex   = new DynamicTexture('tex_space_checker', texSize, scene, false);
+    dynTex.wrapU   = Texture.WRAP_ADDRESSMODE;
+    dynTex.wrapV   = Texture.WRAP_ADDRESSMODE;
+    const ctx = dynTex.getContext();
+    for (let row = 0; row < cellCount; row++) {
+      for (let col = 0; col < cellCount; col++) {
+        ctx.fillStyle = (row + col) % 2 === 0 ? '#151520' : '#252540';
+        ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+      }
+    }
+    dynTex.update();
+    mat.albedoTexture = dynTex;
+    (mat.albedoTexture as DynamicTexture).uScale = 4;
+    (mat.albedoTexture as DynamicTexture).vScale = 4;
+
+    return mat;
+  }
+
+  /** Matériau néon émissif pour les obstacles spatiaux. */
+  static createNeonMaterial(scene: Scene, color: Color3): PBRMaterial {
+    const mat = new PBRMaterial(`mat_neon_${Math.random().toFixed(4)}`, scene);
+    mat.albedoColor   = color;
+    mat.emissiveColor = color;
+    mat.emissiveIntensity = 3.0; // Augmenté pour un effet "glow" plus prononcé
+    mat.metallic      = 0.3;
+    mat.roughness     = 0.4;
+    return mat;
   }
 
   // ─── Helper : appliquer un matériau à un mesh ────────────────────────

@@ -1,4 +1,4 @@
-import { Schema, type, MapSchema } from "@colyseus/schema";
+import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
 
 export class Player extends Schema {
   // ─ Position ──────────────────────────────────────────
@@ -16,8 +16,15 @@ export class Player extends Schema {
   @type("float32") ry: number = 0;
   @type("float32") rz: number = 0;
   @type("float32") rw: number = 1;
+
+  // ─ Lobby ─────────────────────────────────────────────
+  @type("boolean") isReady: boolean = false;
 }
 
 export class GameState extends Schema {
   @type({ map: Player }) players = new MapSchema<Player>();
+  @type(["string"]) winners = new ArraySchema<string>();
+
+  @type("string") status: string = "WAITING"; // WAITING, STARTING, PLAYING, FINISHED
+  @type("number") countdown: number = 0;
 }
