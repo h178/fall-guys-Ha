@@ -7,7 +7,7 @@ import {
   Mesh,
   PhysicsBody,
   PhysicsMotionType,
-  PhysicsShapeBox,
+  PhysicsShapeCylinder,
 } from '@babylonjs/core';
 import type { IObstacle } from './IObstacle';
 import { MaterialSystem } from '../../core/MaterialSystem';
@@ -49,7 +49,7 @@ export class RotatingHammer implements IObstacle {
   private pivot:          TransformNode;
   private pillar:         Mesh;
   private arm:            Mesh;
-  private collisionShape: PhysicsShapeBox;
+  private collisionShape: PhysicsShapeCylinder;
   private body:           PhysicsBody;
 
   // ─── Constructeur ───────────────────────────────────────────────────
@@ -116,29 +116,25 @@ export class RotatingHammer implements IObstacle {
   }
 
   /**
-   * Crée la boîte visuelle du bras/tête du marteau.
-   * Parent = pivot → le bras tourne autour du pivot (centre du pilier).
-   *
-   * Décalage X = ARM_LENGTH/2 :
-   *  - Centre de la box à X=3 → la box va de X=0 à X=ARM_LENGTH(6)
-   *  - Le bras part du bord du pilier et s'étend d'un seul côté
-   *
-   * ⚠️ Ce décalage LOCAL fait que le center de masse du collider
-   *    doit aussi être décalé en conséquence (voir createCollisionShape).
+   * Crée le rondin cylindrique horizontal du bras (reskin Forêt).
+   * Visuel : cylindre couché sur l'axe X (rotation locale Z = π/2).
+   * Physique : le PhysicsShapeBox reste identique (approximation valide).
    */
   private createArm(scene: Scene): Mesh {
-    const arm = MeshBuilder.CreateBox(
+    const arm = MeshBuilder.CreateCylinder(
       'hammerArm',
       {
-        width:  RotatingHammer.ARM_LENGTH,
-        height: RotatingHammer.ARM_HEIGHT,
-        depth:  RotatingHammer.ARM_DEPTH,
+        height:       RotatingHammer.ARM_LENGTH,
+        diameter:     RotatingHammer.ARM_HEIGHT,
+        tessellation: 10,
       },
       scene
     );
-    arm.parent        = this.pivot;
-    arm.position      = new Vector3(RotatingHammer.ARM_LENGTH / 2, 0, 0);
-    arm.material      = MaterialSystem.createArmMaterial(scene);
+    arm.parent = this.pivot;
+    arm.position = new Vector3(RotatingHammer.ARM_LENGTH / 2, 0, 0);
+    // Orienter le cylindre horizontalement sur l'axe X
+    arm.rotation.z = Math.PI / 2;
+    arm.material   = MaterialSystem.createTrunkMaterial(scene);
     arm.receiveShadows = true;
     return arm;
   }
@@ -154,15 +150,14 @@ export class RotatingHammer implements IObstacle {
    * cylindrique fine génère rarement des collisions significatives
    * avec la capsule du joueur. Simplification volontaire Sprint 2.
    */
-  private createCollisionShape(scene: Scene): PhysicsShapeBox {
-    return new PhysicsShapeBox(
-      // Centre LOCAL de la box (doit correspondre au décalage du mesh arm)
-      new Vector3(RotatingHammer.ARM_LENGTH / 2, 0, 0),
-      Quaternion.Identity(),
-      // Extents = dimensions complètes (width/height/depth)
-      new Vector3(RotatingHammer.ARM_LENGTH, RotatingHammer.ARM_HEIGHT, RotatingHammer.ARM_DEPTH),
-      scene
+  private createCollisionShape(scene: Scene): PhysicsShapeCylinder {
+    const shape = new PhysicsShapeCylinder(
+        new Vector3(-RotatingHammer.ARM_LENGTH / 2, 0, 0), // Point A (base)
+        new Vector3(RotatingHammer.ARM_LENGTH / 2, 0, 0),  // Point B (top)
+        RotatingHammer.ARM_HEIGHT / 2,                     // Rayon
+        scene
     );
+    return shape;
   }
 
   /**

@@ -24,14 +24,14 @@ import {
  */
 export class MaterialSystem {
 
-  // ─── Couleurs de la palette ──────────────────────────────────────────
+  // ─── Couleurs de la palette (Thème Forêt) ─────────────────────────────
   static readonly COLOR = {
     PLAYER:       new Color3(0.05, 0.85, 0.90),  // cyan vif
-    GROUND_A:     new Color3(0.92, 0.92, 1.00),  // blanc lavande
-    GROUND_B:     new Color3(0.72, 0.68, 0.98),  // violet clair
-    PILLAR:       new Color3(0.20, 0.22, 0.28),  // anthracite
-    ARM:          new Color3(0.95, 0.18, 0.20),  // rouge vif arcade
-    EMISSIVE_ARM: new Color3(0.15, 0.00, 0.00),  // lueur rouge sombre
+    GROUND_A:     new Color3(0.28, 0.65, 0.15),  // vert herbe
+    GROUND_B:     new Color3(0.18, 0.45, 0.10),  // vert foncé
+    PILLAR:       new Color3(0.35, 0.20, 0.08),  // marron bois
+    ARM:          new Color3(0.55, 0.35, 0.15),  // marron clair
+    EMISSIVE_ARM: new Color3(0.05, 0.02, 0.00),  // lueur bois sombre
   };
 
   // ─── Matériau Joueur (PBR) ───────────────────────────────────────────
@@ -120,6 +120,29 @@ export class MaterialSystem {
     return mat;
   }
 
+  // ─── Matériaux Végétation ───────────────────────────────────────────
+
+  /** Troncs d'arbres décoratifs : bois brut marron foncé. */
+  static createTrunkMaterial(scene: Scene): PBRMaterial {
+    const mat = new PBRMaterial('mat_trunk', scene);
+    mat.albedoColor = new Color3(0.25, 0.14, 0.05);
+    mat.metallic    = 0.0;
+    mat.roughness   = 0.9;
+    mat.freeze();
+    return mat;
+  }
+
+  /** Feuillage d'arbres décoratifs : vert saturé avec micro-émission. */
+  static createFoliageMaterial(scene: Scene): PBRMaterial {
+    const mat = new PBRMaterial('mat_foliage', scene);
+    mat.albedoColor   = new Color3(0.12, 0.55, 0.08);
+    mat.metallic      = 0.0;
+    mat.roughness     = 0.7;
+    mat.emissiveColor = new Color3(0.02, 0.08, 0.01);
+    mat.freeze();
+    return mat;
+  }
+
   // ─── Sky Color ───────────────────────────────────────────────────────
 
   /**
@@ -130,8 +153,8 @@ export class MaterialSystem {
    * Note : scene.clearColor attend Color4 (RGBA), pas Color3.
    */
   static applySkyColor(scene: Scene): void {
-    // Bleu nuit légèrement violacé, pleinement opaque
-    scene.clearColor = new Color4(0.06, 0.04, 0.14, 1.0);
+    // Bleu ciel diurne (thème forêt/jungle)
+    scene.clearColor = new Color4(0.53, 0.81, 0.92, 1.0);
   }
 
   // ─── Helper : appliquer un matériau à un mesh ────────────────────────

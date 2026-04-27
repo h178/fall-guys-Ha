@@ -61,6 +61,8 @@ export class GameLevel {
   private platforms:   Mesh[]                  = [];
   private finishZone:  Mesh | null             = null;
   private ui:          UIManager | null        = null;
+  private decorativeGround: Mesh | null        = null;
+  private vegetationMeshes: Mesh[]             = [];
 
   // ─── Machine à états ────────────────────────────────────────────────
   private state:       GameState = GameState.MENU;
@@ -86,6 +88,8 @@ export class GameLevel {
     this.ui = new UIManager();
 
     this.createPlatforms(shadowGenerator);
+    this.createDecorativeGround();
+    this.createVegetation();
     this.createPlayer(camera, shadowGenerator);
     this.createObstacles(shadowGenerator);
     this.createFinishLine();
@@ -146,6 +150,93 @@ export class GameLevel {
     this.player = new PlayerController(this.scene, camera, new Vector3(0, 2, 0));
     shadowGenerator?.addShadowCaster(this.player.getMesh(), false);
     // N.B. : inputEnabled = false par défaut dans PlayerController
+  }
+
+  /**
+   * Sol décoratif étendu sous les plateformes.
+   * Pas de PhysicsAggregate → le joueur travers en OOB (KILL_Y = -10).
+   * Y = -0.5 pour être légèrement sous les plateformes (Y=0) visuellement.
+   */
+  private createDecorativeGround(): void {
+    this.decorativeGround = MeshBuilder.CreateGround(
+      'decorativeGround',
+      { width: 200, height: 200 },
+      this.scene
+    );
+    this.decorativeGround.position.y = -0.5;
+    const mat = MaterialSystem.createGroundMaterial(this.scene);
+    this.decorativeGround.material = mat;
+    this.decorativeGround.receiveShadows = true;
+    this.decorativeGround.freezeWorldMatrix();
+  }
+
+  /**
+   * Végétation procédurale : 25 instances d'un arbre master (tronc + feuillage).
+   * Positionées aléatoirement autour du parcours, hors zones de gameplay.
+   * Aucun PhysicsAggregate — décor pur.
+   */
+  private createVegetation(): void {
+    const trunkMat   = MaterialSystem.createTrunkMaterial(this.scene);
+    const foliageMat = MaterialSystem.createFoliageMaterial(this.scene);
+
+    // Tronc
+    const trunk = MeshBuilder.CreateCylinder(
+      'treeTrunk',
+      { height: 3, diameter: 0.6, tessellation: 8 },
+      this.scene
+    );
+    trunk.material = trunkMat;
+
+    // Feuillage
+    const canopy = MeshBuilder.CreateSphere(
+      'treeCanopy',
+      { diameter: 2.5, segments: 6 },
+      this.scene
+    );
+    canopy.position.y = 2.5;
+    canopy.material   = foliageMat;
+    canopy.parent     = trunk;
+
+    // Merge trunk + canopy en un seul mesh master
+    const masterTree = Mesh.MergeMeshes(
+      [trunk, canopy],
+      true,   // disposeSource
+      true,   // allow32BitsIndices
+      undefined,
+      false,  // subdivideWithSubMeshes
+      true    // multiMultiMaterials
+    );
+    if (!masterTree) return;
+    masterTree.name = 'masterTree';
+    masterTree.setEnabled(false); // le master est invisible — seules les instances comptent
+
+    // Zones à éviter : |X| < 6 et Z ∈ plateformes ± 4
+    const platformZones = GameLevel.PLATFORMS.map(p => ({ z: p.z, hw: p.depth / 2 + 1 }));
+
+    const rnd    = (min: number, max: number) => Math.random() * (max - min) + min;
+    const count  = 25;
+    let   placed = 0;
+    let   attempts = 0;
+
+    while (placed < count && attempts < 500) {
+      attempts++;
+      const x = rnd(-15, 15);
+      const z = rnd(-5, 35);
+
+      // Exclure corridor central de gameplay
+      const inCorridor = Math.abs(x) < 6 &&
+        platformZones.some(pz => z >= pz.z - pz.hw && z <= pz.z + pz.hw);
+      if (inCorridor) continue;
+
+      const instance = masterTree.createInstance(`tree_${placed}`);
+      instance.position.set(x, 0, z);
+      instance.scaling.setAll(rnd(0.8, 1.3));
+      instance.rotation.y = rnd(0, Math.PI * 2);
+      this.vegetationMeshes.push(instance as unknown as Mesh);
+      placed++;
+    }
+
+    this.vegetationMeshes.push(masterTree);
   }
 
   /**
@@ -285,5 +376,9 @@ export class GameLevel {
       platform.dispose();
     }
     this.finishZone?.dispose();
+    this.decorativeGround?.dispose();
+    for (const mesh of this.vegetationMeshes) {
+      mesh.dispose();
+    }
   }
 }

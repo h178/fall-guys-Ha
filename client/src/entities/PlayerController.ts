@@ -13,6 +13,8 @@ import {
   SceneLoader,
   AnimationGroup,
   AnimationPropertiesOverride,
+  ParticleSystem,
+  Color4,
 } from '@babylonjs/core';
 import '@babylonjs/loaders/glTF';
 import { MaterialSystem } from '../core/MaterialSystem';
@@ -43,7 +45,7 @@ export class PlayerController {
   private static readonly CAPSULE_HEIGHT = 2;    // hauteur de la capsule
   private static readonly CAPSULE_RADIUS = 0.5;
   /** Profondeur Y sous laquelle le joueur est considéré hors-jeu. */
-  private static readonly KILL_Y = -10;
+  private static readonly KILL_Y = -2.0;
   /** Coefficient de Slerp pour la rotation du mesh.
    * 0.15 = rotation douce et naturelle (style Fall Guys).
    * Plus élevé = plus réactif. Plus bas = plus "flottant". */
@@ -88,6 +90,9 @@ export class PlayerController {
   private animFall: AnimationGroup | null = null;
   private currentAnim: AnimationGroup | null = null;
 
+  // ─── Particules ─────────────────────────────────────────────────────
+  private dustSystem: ParticleSystem | null = null;
+
   // ─── Constructeur ───────────────────────────────────────────────────
 
   /**
@@ -116,6 +121,7 @@ export class PlayerController {
     }
 
     this.loadModel();
+    this.createDustSystem();
   }
 
   // ─── Méthodes d'initialisation (privées) ───────────────────────────
@@ -550,12 +556,36 @@ export class PlayerController {
   }
 
   /**
+   * Crée le système de particules de poussière aux pieds du joueur.
+   * emitRate = 0 par défaut — activé par updateAnimation() pendant Run.
+   */
+  private createDustSystem(): void {
+    const dust = new ParticleSystem('runDust', 30, this.scene);
+    dust.emitter        = this.mesh;
+    dust.minEmitBox     = new Vector3(-0.3, -PlayerController.CAPSULE_HEIGHT / 2, -0.3);
+    dust.maxEmitBox     = new Vector3( 0.3, -PlayerController.CAPSULE_HEIGHT / 2,  0.3);
+    dust.color1         = new Color4(0.45, 0.30, 0.15, 0.6);  // marron terre
+    dust.color2         = new Color4(0.30, 0.50, 0.10, 0.4);  // vert feuille
+    dust.minSize        = 0.05;
+    dust.maxSize        = 0.15;
+    dust.minLifeTime    = 0.2;
+    dust.maxLifeTime    = 0.5;
+    dust.emitRate       = 0;  // désactivé par défaut
+    dust.gravity        = new Vector3(0, -2, 0);
+    dust.direction1     = new Vector3(-0.5, 0.3, -0.5);
+    dust.direction2     = new Vector3( 0.5, 0.8,  0.5);
+    dust.start();  // démarrer le système (emitRate=0 → aucune particule jusqu'à Run)
+    this.dustSystem = dust;
+  }
+
+  /**
    * Pilote le controller d'animations (Idle / Run / Fall).
    */
   private updateAnimation(): void {
     if (!this.isLoaded) return;
 
     let targetAnim: AnimationGroup | null = null;
+    let wantDust = false;
 
     if (!this.isGrounded()) {
       targetAnim = this.animFall;
@@ -565,9 +595,15 @@ export class PlayerController {
 
       if (horizSpeed > 0.1) {
         targetAnim = this.animRun;
+        wantDust   = true;
       } else {
         targetAnim = this.animIdle;
       }
+    }
+
+    // Pilotage particules
+    if (this.dustSystem) {
+      this.dustSystem.emitRate = wantDust ? 20 : 0;
     }
 
     // On ne stoppe et on ne trigger le play que s'il y a un changement d'état (anti play cumulatifs)
@@ -591,6 +627,7 @@ export class PlayerController {
   }
 
   dispose(): void {
+    this.dustSystem?.dispose();
     this.aggregate.dispose();
     this.mesh.dispose();
   }
