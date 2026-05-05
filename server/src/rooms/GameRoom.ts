@@ -3,9 +3,9 @@ import { GameState, Player } from "../schemas/GameState";
 
 /** Structure des messages "transform" reçus du client. */
 interface TransformMessage {
-  x:  number;
-  y:  number;
-  z:  number;
+  x: number;
+  y: number;
+  z: number;
   rx: number;
   ry: number;
   rz: number;
@@ -15,83 +15,130 @@ interface TransformMessage {
 export class GameRoom extends Room<GameState> {
   maxClients = 10;
   private readonly MAX_WINNERS = 3;
+  private roundTimer: any = null;
+  private gameTimeout: any = null;
+  private replayVotes = new Set<string>();
+
+  private static readonly LEVELS = [
+    { name: 'jungle', finishZ: 30, mode: 'race' }, // MAJ: Centré à 30
+    { name: 'space',  finishZ: 50, mode: 'race' }, // MAJ: Centré à 50
+    { name: 'park',   finishZ: 45, mode: 'race' }, // Reste à 45
+    { name: 'ice',    finishZ: 42, mode: 'race' }, // MAJ: Centré à 42
+  ];
+  private currentLevelIndex = 0;
 
   onCreate(): void {
     this.setState(new GameState());
 
+    // ─ Message handler : finish ────────────────────────────
     this.onMessage("finish", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
-      
-      // Validation côté serveur (Le finish est approximativement vers Z=30)
-      if (player.z < 25) {
-         console.warn(`Anti-cheat: ${client.sessionId} a envoyé finish trop loin (Z=${player.z})`);
-         return;
+
+      // Validation côté serveur dynamique selon le niveau
+      const levelInfo = GameRoom.LEVELS[this.currentLevelIndex];
+      if (player.z < levelInfo.finishZ - 8) {
+        console.warn(`Anti-cheat: ${client.sessionId} trop loin (Z=${player.z}, need ${levelInfo.finishZ})`);
+        return;
       }
-      
+
       if (!this.state.winners.includes(client.sessionId)) {
         this.state.winners.push(client.sessionId);
-        if (this.state.winners.length >= this.MAX_WINNERS) {
-          this.state.status = "FINISHED";
-          if (gameTimeout) gameTimeout.clear();
-          this.endGame();
-        }
+        
+        // Attribution des points : 1 point par victoire (Sprint 26)
+        const currentScore = this.state.globalScores.get(client.sessionId) || 0;
+        this.state.globalScores.set(client.sessionId, currentScore + 1);
+
+        // Fin de la partie dès qu'on a un gagnant (Sprint 28)
+        if (this.roundTimer) this.roundTimer.clear();
+        this.endGame();
       }
     });
 
     // ─ Message handler : transform du joueur ────────────────
-    // Le client envoie sa position + rotation post-physics. Le serveur :
-    //  1. Retrouve le Player dans le state via sessionId
-    //  2. Clamp les positions (anti-triche basique)
-    //  3. Assigne position + rotation sur le schema
-    //  4. Colyseus broadcast automatiquement via patchRate
     this.onMessage("transform", (client: Client, data: TransformMessage) => {
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
 
-      // Position — clamp basique (empêche les valeurs absurdes)
+      // Position — clamp basique
       player.x = Math.max(-50, Math.min(50, data.x));
       player.y = Math.max(-20, Math.min(50, data.y));
-      player.z = Math.max(-50, Math.min(50, data.z));
+      player.z = Math.max(-50, Math.min(200, data.z));
 
-      // Rotation — pas de clamp (quaternion unitaire, composantes [-1,1] par nature)
+      // Rotation — quaternion unitaire, composantes [-1,1] par nature
       player.rx = data.rx;
       player.ry = data.ry;
       player.rz = data.rz;
       player.rw = data.rw;
     });
 
-    // ─ Game Loop (Lobby) ────────────────────────
-    let countdownInterval: any;
-    let gameTimeout: any;
-
+    // ─ Message handler : ready (Lobby) ────────────────────────
     this.onMessage("ready", (client) => {
       if (this.state.status !== "WAITING") return;
+
       const player = this.state.players.get(client.sessionId);
-      if (player) {
-        player.isReady = true;
-      }
+      if (!player) return;
 
-      // Vérifier si 100% des joueurs présents sont ready (et au moins 1 joueur)
+      player.isReady = true;
+
+      // Vérifier si tous les joueurs sont prêts
       let allReady = true;
-      this.state.players.forEach(p => { if (!p.isReady) allReady = false; });
-      
-      if (allReady && this.state.players.size > 0) {
-        this.state.status = "STARTING";
-        this.state.countdown = 5; // 5 secondes
-        
-        // Utiliser Clock pour tick 1 fois par seconde
-        countdownInterval = this.clock.setInterval(() => {
-          this.state.countdown--;
-          if (this.state.countdown <= 0) {
-            this.state.status = "PLAYING";
-            countdownInterval.clear(); // Terminer
+      this.state.players.forEach((p) => {
+        if (!p.isReady) allReady = false;
+      });
 
-            gameTimeout = this.clock.setTimeout(() => {
-              if (this.state.status === "PLAYING") this.endGame();
-            }, 60000);
-          }
-        }, 1000);
+      if (allReady && this.state.players.size > 0) {
+        this.startCountdown();
+      }
+    });
+
+    this.onMessage("vote_level", (client, data: { level: string }) => {
+      if (this.state.status !== "WAITING") return;
+      const validLevels = GameRoom.LEVELS.map(l => l.name);
+      if (!validLevels.includes(data.level)) return;
+      
+      const player = this.state.players.get(client.sessionId);
+      if (player) player.votedLevel = data.level;
+    });
+
+    this.onMessage("replay", (client) => {
+      if (this.state.status !== "FINISHED") return;
+      this.replayVotes.add(client.sessionId);
+      
+      // Si la majorité des joueurs présents vote "replay", forcer le reset
+      if (this.replayVotes.size >= Math.ceil(this.state.players.size / 2)) {
+        if (this.gameTimeout) this.gameTimeout.clear();
+        this.resetGame();
+      }
+    });
+
+    this.onMessage("force_lobby", (client) => {
+      console.log(`[ROOM] Player ${client.sessionId} force le retour au lobby.`);
+      if (this.gameTimeout) this.gameTimeout.clear();
+      if (this.roundTimer) this.roundTimer.clear();
+      this.resetGame(); // Renvoie tout le monde dans le lobby (WAITING)
+    });
+
+    this.onMessage("eliminate", (client) => {
+      if (this.state.status !== "PLAYING") return;
+      const player = this.state.players.get(client.sessionId);
+      if (player && !player.isEliminated) {
+        player.isEliminated = true;
+        console.log(`💀 Player eliminated: ${client.sessionId}`);
+        
+        // Tous les niveaux sont en mode "race" maintenant.
+        // On vérifie simplement si TOUS les joueurs sont éliminés pour clore la partie
+        // sans vainqueur (tout le monde est tombé).
+        let allEliminated = true;
+        this.state.players.forEach((p) => {
+          if (!p.isEliminated) allEliminated = false;
+        });
+        
+        if (allEliminated) {
+           console.log("🏁 Tous les joueurs sont éliminés ! Fin de la manche.");
+           if (this.roundTimer) this.roundTimer.clear();
+           this.endGame();
+        }
       }
     });
 
@@ -102,13 +149,10 @@ export class GameRoom extends Room<GameState> {
     console.log(`➕ Player joined: ${client.sessionId}`);
 
     const player = new Player();
-    // Offset aléatoire en X/Z pour que les capsules ne soient
-    // pas empilées au même point (visuellement invérifiable sinon)
-    player.x = (Math.random() - 0.5) * 4;  // entre -2 et +2
-    player.y = 1;                            // centre capsule au sol
+    player.x = (Math.random() - 0.5) * 4;
+    player.y = 1;
     player.z = (Math.random() - 0.5) * 4;
 
-    // La clé de la MapSchema = sessionId du client
     this.state.players.set(client.sessionId, player);
   }
 
@@ -121,23 +165,86 @@ export class GameRoom extends Room<GameState> {
     console.log("🗑️ GameRoom disposed");
   }
 
+  // ─── Décompte & Transition ────────────────────────────────
+  private startCountdown(): void {
+    // Résoudre le vote : niveau avec le plus de voix (fallback = rotation)
+    const votes: Record<string, number> = {};
+    this.state.players.forEach(p => {
+      if (p.votedLevel) votes[p.votedLevel] = (votes[p.votedLevel] || 0) + 1;
+    });
+
+    const sorted = Object.entries(votes).sort((a, b) => b[1] - a[1]);
+    if (sorted.length > 0) {
+      const winnerName = sorted[0][0];
+      const idx = GameRoom.LEVELS.findIndex(l => l.name === winnerName);
+      if (idx !== -1) this.currentLevelIndex = idx;
+    } else {
+      // Rotation fallback (Sprint 22)
+      this.currentLevelIndex = (this.currentLevelIndex + 1) % GameRoom.LEVELS.length;
+    }
+    
+    const level = GameRoom.LEVELS[this.currentLevelIndex];
+    this.state.remainingTime = 180; // Unifié : 3 minutes pour tous les niveaux
+    
+    this.state.currentLevel = level.name;
+    this.state.status = "STARTING";
+    this.state.countdown = 5;
+
+    const interval = this.clock.setInterval(() => {
+      this.state.countdown -= 1;
+      if (this.state.countdown <= 0) {
+        interval.clear();
+        this.state.status = "PLAYING";
+
+        // Timer global pour la manche
+        this.roundTimer = this.clock.setInterval(() => {
+          this.state.remainingTime--;
+          
+          if (this.state.remainingTime <= 0) {
+            this.roundTimer.clear();
+            
+            // Course : le temps est écoulé, ceux qui n'ont pas fini sont éliminés
+            this.state.players.forEach((p, id) => {
+              if (!this.state.winners.includes(id)) {
+                p.isEliminated = true;
+              }
+            });
+            this.endGame();
+          }
+        }, 1000);
+      }
+    }, 1000);
+  }
+
   private endGame(): void {
     this.state.status = "FINISHED";
-    
-    // Transition vers le reset après 10 secondes
-    this.clock.setTimeout(() => {
-      this.state.status = "WAITING";
-      this.state.winners.clear();
-      this.state.players.forEach(p => {
-        p.isReady = false;
-        // Téléporte tous les joueurs à (0, 5, 0)
-        p.x = 0;
-        p.y = 5;
-        p.z = 0;
-      });
-      
-      // Ordre RPC aux clients pour reset leur physique locale
-      this.broadcast("reset_level");
+    this.replayVotes.clear();
+
+    // Transition vers le reset automatique après 10 secondes
+    this.gameTimeout = this.clock.setTimeout(() => {
+      this.resetGame();
     }, 10000);
+  }
+
+  private resetGame(): void {
+    if (this.gameTimeout) this.gameTimeout.clear();
+    
+    this.state.status = "WAITING";
+    this.state.countdown = 0;
+    this.state.winners.clear();
+    this.replayVotes.clear();
+    
+    this.state.players.forEach((p) => {
+      p.isReady = false;
+      p.votedLevel = "";
+      p.isEliminated = false;
+      p.roundScore = 0;
+      p.x = 0;
+      p.y = 5;
+      p.z = 0;
+    });
+
+    this.state.remainingTime = 0;
+    this.broadcast("reset_level");
   }
 }

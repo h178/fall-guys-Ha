@@ -19,6 +19,9 @@ export class Player extends Schema {
 
   // ─ Lobby ─────────────────────────────────────────────
   @type("boolean") isReady: boolean = false;
+  @type("string") votedLevel: string = "";
+  @type("boolean") isEliminated: boolean = false;
+  @type("number") roundScore: number = 0;
 }
 
 export class GameState extends Schema {
@@ -27,4 +30,7 @@ export class GameState extends Schema {
 
   @type("string") status: string = "WAITING"; // WAITING, STARTING, PLAYING, FINISHED
   @type("number") countdown: number = 0;
+  @type("string") currentLevel: string = "jungle";
+  @type("number") remainingTime: number = 0;
+  @type({ map: "number" }) globalScores = new MapSchema<number>();
 }

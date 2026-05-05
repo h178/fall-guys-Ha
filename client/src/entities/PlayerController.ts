@@ -8,6 +8,8 @@ import {
   KeyboardEventTypes,
   ArcRotateCamera,
   Mesh,
+  StandardMaterial,
+  TransformNode,
   HavokPlugin,
   Quaternion,
   SceneLoader,
@@ -17,7 +19,7 @@ import {
   Color4,
 } from '@babylonjs/core';
 import '@babylonjs/loaders/glTF';
-import { MaterialSystem } from '../core/MaterialSystem';
+import { VFXSystem } from '../core/VFXSystem';
 
 /**
  * Contrôleur de personnage pour FG.
@@ -51,7 +53,8 @@ export class PlayerController {
    * Plus élevé = plus réactif. Plus bas = plus "flottant". */
   private static readonly ROTATION_SLERP = 0.15;
   /** Facteur d'échelle du modèle GLB. Ajuster ICI si le modèle est trop grand/petit. */
-  private static readonly MODEL_SCALE = 0.2
+  /** Facteur d'échelle du modèle GLB. Ajuster ICI si le modèle est trop grand/petit. */
+  private static readonly MODEL_SCALE = 0.08;
 
   // ─── Propriétés privées ─────────────────────────────────────────────
   public conveyorVelocity: Vector3 = Vector3.Zero();
@@ -64,6 +67,7 @@ export class PlayerController {
   private scene: Scene;
   private camera: ArcRotateCamera;
   public mesh: Mesh;
+  private visualAnchor: TransformNode;
   private aggregate: PhysicsAggregate;
 
   /** Point de réapparition. Cloné au constructeur pour éviter les mutations. */
@@ -74,6 +78,7 @@ export class PlayerController {
    * Empêche les appels multiples si le joueur passe plusieurs frames sous KILL_Y.
    */
   private isRespawning = false;
+  private canDoubleJump: boolean = false;
 
   /**
    * Contrôle si les inputs clavier/manette sont actifs.
@@ -89,13 +94,22 @@ export class PlayerController {
    * sans aucune logique de mappage supplémentaire.
    */
   private inputMap: Record<string, boolean> = {};
+  public isOnIce: boolean = false;
+  public currentLevelTheme: string = 'jungle';
+  public currentMode: 'race' | 'survival' | 'collect' = 'race';
+  public onEliminated: () => void = () => {};
+  private lastSpeed: number = 0;
+  private inputX: number = 0;
+  private inputZ: number = 0;
 
   // ─── Animations ─────────────────────────────────────────────────────
   private isLoaded: boolean = false;
   private animIdle: AnimationGroup | null = null;
   private animRun: AnimationGroup | null = null;
   private animFall: AnimationGroup | null = null;
+  private animBrake: AnimationGroup | null = null;
   private currentAnim: AnimationGroup | null = null;
+  private vfxFrameCount: number = 0;
 
   // ─── Particules ─────────────────────────────────────────────────────
   private dustSystem: ParticleSystem | null = null;
@@ -117,6 +131,17 @@ export class PlayerController {
     this.spawnPoint = spawnPoint.clone();  // clone : immunise contre les mutations externes
 
     this.mesh = this.createMesh();
+    // Ancre visuelle : permet de garder la capsule invisible sans cacher le modèle GLB.
+    // Le modèle est parenté à ce TransformNode (pas directement à this.mesh).
+    this.visualAnchor = new TransformNode('player_visual_anchor', this.scene);
+    this.visualAnchor.parent = this.mesh;
+    this.mesh.setEnabled(true);
+    this.visualAnchor.setEnabled(true);
+    console.log('🟩 [PLAYER INIT] Collider mesh created', {
+      position: this.mesh.position.toString(),
+      enabled: this.mesh.isEnabled(),
+      isVisible: this.mesh.isVisible,
+    });
     this.aggregate = this.createPhysicsBody();
     this.registerInputs();
 
@@ -154,9 +179,12 @@ export class PlayerController {
     );
     // Utiliser spawnPoint plutôt qu'un Vector3 hardcodé
     mesh.position = this.spawnPoint.clone();
-    mesh.material = MaterialSystem.createPlayerMaterial(this.scene);
-    mesh.receiveShadows = true;
-    mesh.isVisible = false; // Le collider de physique devient invisible
+    const transparentMat = new StandardMaterial('mat_collider_hidden', this.scene);
+    transparentMat.alpha = 0;
+    mesh.material = transparentMat;
+    // Collider invisible (contrat): on cache la capsule.
+    mesh.isPickable = false;
+    mesh.isVisible = false;
 
     // Initialiser le quaternion de rotation AVANT la liaison physics.
     // Une fois défini, Babylon ignore mesh.rotation (Euler) et
@@ -228,8 +256,26 @@ export class PlayerController {
   public stun(duration: number): void {
     this.isStunned = true;
     this.stunTimer = duration;
-    // Plafonner le trauma à 1.0 pour éviter que la caméra ne s'envole sur Saturne
-    this.trauma = Math.min(1.0, this.trauma + 0.8);
+    this.trauma = 0.8;
+  }
+
+  /**
+   * Configure le profil physique du joueur selon le thème du niveau.
+   * Appeler depuis createPlayer() dans GameLevel après assignation de currentLevelTheme.
+   */
+  public setThemePhysics(theme: string): void {
+    this.currentLevelTheme = theme;
+    switch (theme) {
+      case 'ice':
+        this.isOnIce = true;
+        break;
+      case 'space':
+        this.isOnIce = false;
+        break;
+      default:
+        this.isOnIce = false;
+        break;
+    }
   }
 
   /**
@@ -243,6 +289,27 @@ export class PlayerController {
    * (la vélocité est une valeur absolue, pas un incrément).
    */
   update(_deltaTime: number): void {
+    // --- SANITY CHECK DE VISIBILITÉ ---
+    if (this.isLoaded) {
+        // 1. Force l'activation du node racine
+        const root = this.visualAnchor.getChildren()[0] as Mesh;
+        if (root && !root.isEnabled()) root.setEnabled(true);
+        
+        // 2. Force la visibilité de TOUS les sous-meshes du modèle GLB
+        //    mais exclut le collider capsule (this.mesh)
+        this.visualAnchor.getChildMeshes().forEach(m => {
+            m.isVisible = true;
+            m.visibility = 1.0;
+            m.renderingGroupId = 1; // Priorité de rendu
+        });
+
+        // 3. Sécurité de Position (Anti-Void)
+        if (this.mesh.position.y < -20 || isNaN(this.mesh.position.y)) {
+            console.warn("Position aberrante détectée, respawn forcé.");
+            this.respawn();
+        }
+    }
+
     // ─ Out of Bounds — vérification EN PREMIER (early return) ────────
     // Si un respawn est déjà en cours, ne rien faire pendant ce frame.
     // Sans ce guard, applyMovement() écraserait la vélocité qu'on vient
@@ -304,63 +371,44 @@ export class PlayerController {
    * Havok et le saut en cours.
    */
   private applyMovement(_deltaTime: number): void {
-    // 1. Capturer les inputs bruts
-    let inputZ = 0;
-    let inputX = 0;
-    if (this.inputMap['KeyW']) inputZ = 1;
-    if (this.inputMap['KeyS']) inputZ = -1;
-    if (this.inputMap['KeyA']) inputX = -1;
-    if (this.inputMap['KeyD']) inputX = 1;
+    this.inputX = 0;
+    this.inputZ = 0;
+    if (this.inputMap['KeyW']) this.inputZ = 1;
+    if (this.inputMap['KeyS']) this.inputZ = -1;
+    if (this.inputMap['KeyA']) this.inputX = -1;
+    if (this.inputMap['KeyD']) this.inputX = 1;
 
-    // 2. Calculer la direction de base
-    if (inputZ === 0 && inputX === 0) {
-      // Pas d'input → on ne génère pas de mouvement propre, mais on préserve le conveyor
-    }
-
-    // 3. Calculer les vecteurs forward/right depuis camera.alpha
-    const alpha = this.camera.alpha;
-    const forward = new Vector3(-Math.sin(alpha), 0, -Math.cos(alpha));
-    const right = new Vector3(Math.cos(alpha), 0, -Math.sin(alpha));
-
-    // 4. Combiner inputs × vecteurs caméra
-    const moveDir = forward.scale(inputZ).add(right.scale(inputX));
-
-    // 5. Normaliser (la diagonale serait ~1.41× sinon)
-    if (moveDir.lengthSquared() > 0) {
-      moveDir.normalize();
-    }
-
-    // 6. Appliquer la vélocité avec ANTI-SNAP (Lerp) et CONVEYOR
     const currentVel = this.aggregate.body.getLinearVelocity();
 
-    const targetVelX = moveDir.x * PlayerController.MOVE_SPEED + this.conveyorVelocity.x;
-    const targetVelZ = moveDir.z * PlayerController.MOVE_SPEED + this.conveyorVelocity.z;
-
-    let newVx = targetVelX;
-    let newVz = targetVelZ;
-
-    // Calcul des vitesses horizontales carrées
-    const currentSpeedSq = currentVel.x * currentVel.x + currentVel.z * currentVel.z;
-    const targetSpeedSq = targetVelX * targetVelX + targetVelZ * targetVelZ;
-    const normalSpeedSq = PlayerController.MOVE_SPEED * PlayerController.MOVE_SPEED;
-
-    // Si le joueur va très vite (saut champignon) et qu'on essaie de ralentir → ANTI-SNAP
-    if (currentSpeedSq > targetSpeedSq && currentSpeedSq > normalSpeedSq * 1.5) {
-      // Décélération/frottement doux au lieu d'un écrasement brutal
-      const friction = Math.min(_deltaTime * 3, 1);
-      newVx = currentVel.x + (targetVelX - currentVel.x) * friction;
-      newVz = currentVel.z + (targetVelZ - currentVel.z) * friction;
+    // 1. Damping : Ne freiner fort QUE si on ne bouge pas ET qu'on n'est pas poussé
+    if (this.inputZ === 0 && this.inputX === 0 && this.conveyorVelocity.lengthSquared() === 0) {
+      this.aggregate.body.setLinearDamping(this.isOnIce ? 1.0 : 10.0);
+    } else {
+      this.aggregate.body.setLinearDamping(this.isOnIce ? 0.5 : 2.0);
     }
 
-    this.aggregate.body.setLinearVelocity(
-      new Vector3(newVx, currentVel.y, newVz)
-    );
-    this.conveyorVelocity.setAll(0); // Reset systématique
+    // 2. Vecteurs de direction (Input)
+    const alpha = this.camera.alpha;
+    const forward = new Vector3(-Math.cos(alpha), 0, -Math.sin(alpha));
+    const right = new Vector3(-Math.sin(alpha), 0, Math.cos(alpha));
+    const moveDir = forward.scale(this.inputZ).add(right.scale(this.inputX));
+    if (moveDir.lengthSquared() > 0) moveDir.normalize();
 
-    // 7. Rotation du mesh vers la direction du mouvement (seulement si input actif)
-    if (moveDir.lengthSquared() > 0) {
-      this.applyRotation(moveDir);
-    }
+    // 3. Calcul de la vitesse cible (Input + Tapis roulant/Roues)
+    // On ajoute conveyorVelocity MÊME SI le joueur ne presse aucune touche !
+    const targetVx = moveDir.x * PlayerController.MOVE_SPEED + this.conveyorVelocity.x;
+    const targetVz = moveDir.z * PlayerController.MOVE_SPEED + this.conveyorVelocity.z;
+
+    // on interpole. Un Lerp faible sur la glace donne une accélération lente.
+    const lerpFactor = this.isOnIce ? 0.03 : 0.3; // Ajuster selon le Game Feel
+    const newVx = currentVel.x + (targetVx - currentVel.x) * lerpFactor;
+    const newVz = currentVel.z + (targetVz - currentVel.z) * lerpFactor;
+
+    this.aggregate.body.setLinearVelocity(new Vector3(newVx, currentVel.y, newVz));
+    this.conveyorVelocity.setAll(0);
+    this.applyRotation(moveDir);
+
+    // (inputX/inputZ sont reset au début de la fonction)
   }
 
   /**
@@ -385,48 +433,80 @@ export class PlayerController {
    * @param moveDirection Vecteur de mouvement normalisé sur le plan XZ
    */
   private applyRotation(moveDirection: Vector3): void {
-    if (!this.mesh.rotationQuaternion) return;  // safety guard
+    if (!this.visualAnchor.rotationQuaternion) return;
 
-    // Quaternion cible : "regarde dans la direction du mouvement"
-    // FromLookDirectionLH prend (forward, up) et retourne le quaternion
-    const targetQuat = Quaternion.FromLookDirectionLH(
-      moveDirection,
-      Vector3.Up()
-    );
+    // 1. Calculer la direction cible
+    const targetQuat = Quaternion.FromLookDirectionLH(moveDirection, Vector3.Up());
 
-    // Fix "shortest path" : si le dot product est négatif,
-    // inverser le target pour que le Slerp prenne le chemin court.
-    if (Quaternion.Dot(this.mesh.rotationQuaternion, targetQuat) < 0) {
-      targetQuat.scaleInPlace(-1);
+    // 2. IMPORTANT : Le modèle HVGirl regarde Z- par défaut. 
+    // On lui applique une rotation de 180° (Math.PI) pour qu'il donne son dos !
+    const flip180 = Quaternion.RotationAxis(Vector3.Up(), Math.PI);
+    const finalTargetQuat = targetQuat.multiply(flip180);
+
+    // 3. Dot Product (Shortest path)
+    if (Quaternion.Dot(this.visualAnchor.rotationQuaternion, finalTargetQuat) < 0) {
+      finalTargetQuat.scaleInPlace(-1);
     }
 
-    // Slerp : interpolation sphérique fluide (écriture in-place)
+    // 4. On Slerp DIRECTEMENT sur visualAnchor, car Havok bloque this.mesh !
     Quaternion.SlerpToRef(
-      this.mesh.rotationQuaternion,
-      targetQuat,
+      this.visualAnchor.rotationQuaternion,
+      finalTargetQuat,
       PlayerController.ROTATION_SLERP,
-      this.mesh.rotationQuaternion  // résultat écrit en place
+      this.visualAnchor.rotationQuaternion
     );
   }
 
   /**
    * Applique une impulsion verticale si le joueur est au sol et
    * appuie sur Espace.
-   *
-   * Anti bunny-hop : la touche est immédiatement effacée de l'input map
-   * après le saut. Le joueur doit physiquement relâcher et ré-appuyer
-   * sur Espace pour déclencher un nouveau saut au prochain contact sol.
+   * Applique une impulsion verticale (Saut et Double Saut).
    */
   private applyJump(): void {
-    if (this.inputMap['Space'] && this.isGrounded()) {
-      const currentVel = this.aggregate.body.getLinearVelocity();
-      this.aggregate.body.setLinearVelocity(
-        new Vector3(currentVel.x, PlayerController.JUMP_IMPULSE, currentVel.z)
-      );
-      // Efface immédiatement la pression de Espace → empêche le
-      // bunny-hop (maintenir Espace = sauter en boucle indésirable)
-      this.inputMap['Space'] = false;
+    const isGrounded = this.isGrounded();
+
+    // Reset du double saut si on est au sol (et qu'on ne saute pas à cette frame)
+    if (isGrounded && !this.inputMap['Space']) {
+      this.canDoubleJump = false;
     }
+
+    if (this.inputMap['Space']) {
+      if (isGrounded) {
+        // --- PREMIER SAUT ---
+        this.executeJumpForce(1.0);
+        this.canDoubleJump = true; // Autoriser le 2ème saut
+        this.inputMap['Space'] = false;
+      } 
+      else if (this.canDoubleJump) {
+        // --- DOUBLE SAUT (en l'air) ---
+        // On donne une impulsion légèrement réduite (80%) pour le double saut
+        this.executeJumpForce(0.8);
+        this.canDoubleJump = false; // Bloquer les sauts infinis
+        this.inputMap['Space'] = false;
+
+        // Feedback visuel (VFX) du double saut sous les pieds
+        const feetPosition = this.mesh.position.clone();
+        feetPosition.y -= 1.0;
+        VFXSystem.emit(this.scene, feetPosition, this.currentLevelTheme);
+      }
+    }
+  }
+
+  /**
+   * Applique la force physique du saut.
+   */
+  private executeJumpForce(multiplier: number): void {
+    const jumpForce = this.currentLevelTheme === 'space'
+      ? PlayerController.JUMP_IMPULSE * 0.85 * multiplier
+      : PlayerController.JUMP_IMPULSE * multiplier;
+      
+    const currentVel = this.aggregate.body.getLinearVelocity();
+    
+    // On écrase la vélocité Y pour garantir un saut consistant
+    // même si le joueur commençait déjà à retomber lourdement
+    this.aggregate.body.setLinearVelocity(
+      new Vector3(currentVel.x, jumpForce, currentVel.z)
+    );
   }
 
   /**
@@ -525,37 +605,33 @@ export class PlayerController {
    *     (pas immédiatement — Havok doit lire la nouvelle position d'abord)
    */
   respawn(): void {
-    if (this.isRespawning) return;  // anti-spam : une seule séquence à la fois
+    if (this.isRespawning) return;
     this.isRespawning = true;
 
     // 1. Ouvrir la synchronisation mesh → physics body
     this.aggregate.body.disablePreStep = false;
 
-    // 2. Téléporter : copyFrom() est plus efficace que l'assignation d'un new Vector3
+    // 2. Téléporter le joueur et forcer le calcul de la matrice
     this.mesh.position.copyFrom(this.spawnPoint);
+    this.mesh.computeWorldMatrix(true);
 
-    // 2b. Reset la rotation visuelle : le joueur regarde vers Z+ au respawn
     if (this.mesh.rotationQuaternion) {
       this.mesh.rotationQuaternion.copyFrom(Quaternion.Identity());
     }
+    this.camera.alpha = -Math.PI / 2;
+    this.vfxFrameCount = 0;
 
-    // 3. Annuler toutes les vélocités accumulées
-    //    Sans cela : la vitesse de chute (−9.81 × t) ferait traverser le sol au respawn.
+    // 3. Annuler les vélocités
     this.aggregate.body.setLinearVelocity(Vector3.Zero());
-    //    setAngularVelocity est défensif ici (inertia = ZeroReadOnly → no-op),
-    //    conservé comme mesure de sécurité "belt and suspenders".
     this.aggregate.body.setAngularVelocity(Vector3.Zero());
 
-    // 4. Refermer la synchro après DEUX frames.
-    //    Frame 1 : Havok lit la nouvelle position (disablePreStep = false).
-    //    Frame 2 : le body est stabilisé → on referme en sécurité.
-    //    Double addOnce : chaque callback se désinscrit automatiquement.
-    this.scene.onAfterRenderObservable.addOnce(() => {
-      this.scene.onAfterRenderObservable.addOnce(() => {
+    // 4. Refermer la synchro avec un délai garanti (indépendant du framerate)
+    setTimeout(() => {
+      if (this.aggregate && this.aggregate.body) {
         this.aggregate.body.disablePreStep = true;
-        this.isRespawning = false;
-      });
-    });
+      }
+      this.isRespawning = false;
+    }, 50);
   }
 
   // ─── Animations (privées) ───────────────────────────────────────────
@@ -565,6 +641,7 @@ export class PlayerController {
    */
   private async loadModel(): Promise<void> {
     try {
+      console.log('🟦 [PLAYER INIT] Loading model HVGirl.glb…');
       const result = await SceneLoader.ImportMeshAsync(
         null,
         "https://models.babylonjs.com/",
@@ -573,10 +650,17 @@ export class PlayerController {
       );
 
       const rootNode = result.meshes[0];
+      console.log('🟩 [PLAYER INIT] Model loaded', {
+        meshes: result.meshes.length,
+        anims: result.animationGroups.length,
+        rootName: rootNode?.name,
+      });
 
       // Parenter au collider — la rotation et la position MONDE
       // du root node seront désormais relatives à la capsule parent.
-      rootNode.parent = this.mesh;
+      rootNode.parent = this.visualAnchor;
+      rootNode.setEnabled(true);
+      this.visualAnchor.setEnabled(true);
 
       // ─ SCALING (CORRECTIF CRITIQUE) ────────────────────────────────
       // HVGirl.glb est exporté à ~66 unités de hauteur (échelle Blender).
@@ -584,32 +668,84 @@ export class PlayerController {
       // setAll() écrit X, Y, Z en une seule opération (pas de new Vector3).
       // Ajuster MODEL_SCALE (constante de classe) pour retuner la taille.
       rootNode.scaling.setAll(PlayerController.MODEL_SCALE);
+      if (rootNode.scaling.lengthSquared() < 1e-8) {
+        rootNode.scaling.setAll(PlayerController.MODEL_SCALE);
+      }
 
       // ─ ROTATION DE BASE ─────────────────────────────────────────────
       // HVGirl est exportée dos à la caméra par rapport à la convention
       // Babylon.js (Z+ = avant). Rotation Y de π (180°) sur le CHILD
       // pour la faire face à la direction de mouvement.
-      // ⚠️ Cette rotation est en Euler et s'applique uniquement au child.
-      //    La capsule PARENT utilise rotationQuaternion — aucun conflit,
-      rootNode.rotation.y = 0;
+      // Correction : HVGirl.glb regarde Z- par défaut. On la pivote de 180°
+      // pour qu'elle regarde Z+ (Forward) en accord avec le controlleur.
+      // ─ ROTATION DE BASE (FIX DÉFINITIF DU DOS À LA CAMÉRA) ─────────
+      // HVGirl est exportée de face (Z-). Les animations GLB écrasent 
+      // la rotation du rootNode. On applique donc la rotation de 180° 
+      // (Math.PI) directement sur le visualAnchor avec un Quaternion !
+      this.visualAnchor.rotationQuaternion = Quaternion.RotationAxis(Vector3.Up(), Math.PI);
+      
+      // On s'assure que le rootNode garde une identité neutre
+      rootNode.rotationQuaternion = Quaternion.Identity();
 
       // ─ OFFSET VERTICAL ──────────────────────────────────────────────
       // Décaler vers le bas pour que les pieds de l'avatar s'alignent
       // au bas de la capsule Havok = -(hauteur_capsule / 2) = -1.
-      rootNode.position.y = -PlayerController.CAPSULE_HEIGHT / 2;
+      rootNode.position.y = -PlayerController.CAPSULE_HEIGHT / 2; // -1.0 si hauteur=2
+
+      // ─ Sanity visuel post-load : forcer visibilité/enabled sur tous les submeshes ─
+      this.visualAnchor.getChildMeshes().forEach(m => {
+        m.setEnabled(true);
+        m.isVisible = true;
+        m.visibility = 1.0;
+        m.renderingGroupId = 1;
+      });
+      console.log('🟩 [PLAYER INIT] Visual sanity applied', {
+        colliderPos: this.mesh.position.toString(),
+        rootPos: rootNode.getAbsolutePosition().toString(),
+        rootScaling: rootNode.scaling.toString(),
+        childMeshes: this.visualAnchor.getChildMeshes().length,
+      });
 
       // Arrêter toutes les animations lues (Babylon autoplay souvent la première)
       result.animationGroups.forEach(ag => ag.stop());
 
-      // Assigner les animations trouvées
-      this.animIdle = result.animationGroups.find(ag => ag.name === 'Idle') || null;
-      this.animRun = result.animationGroups.find(ag => ag.name === 'Run') || null;
-      this.animFall = result.animationGroups.find(ag => ag.name === 'Falling' || ag.name === 'Fall') || null;
+      // Assigner les animations trouvées via toLowerCase().includes()
+      this.animIdle = result.animationGroups.find(ag => ag.name.toLowerCase().includes('idle')) || null;
+      this.animRun = result.animationGroups.find(ag => ag.name.toLowerCase().includes('run')) || null;
+      this.animFall = result.animationGroups.find(ag => ag.name.toLowerCase().includes('fall') || ag.name.toLowerCase().includes('jump')) || null;
+      this.animBrake = result.animationGroups.find(ag => ag.name.toLowerCase().includes('brake') || ag.name.toLowerCase().includes('stop')) || null;
 
       this.isLoaded = true;
     } catch (error) {
-      console.error("Erreur de chargement du modèle 3D :", error);
+      console.error("🟥 [PLAYER INIT] Erreur de chargement du modèle 3D :", error);
+      // Fallback visuel minimal : rendre la capsule visible si le GLB échoue,
+      // pour éviter un joueur “invisible” total pendant le debug.
+      this.mesh.isVisible = true;
+      const mat = this.mesh.material as StandardMaterial | null;
+      if (mat) mat.alpha = 0.35;
+      console.log('🟨 [PLAYER INIT] Fallback capsule visible', {
+        position: this.mesh.position.toString(),
+        alpha: mat ? mat.alpha : '(no-mat)',
+      });
     }
+  }
+
+  public forceVisualSanity(): void {
+    console.log('🟦 [PLAYER INIT] forceVisualSanity()', {
+      colliderPos: this.mesh.position.toString(),
+      colliderEnabled: this.mesh.isEnabled(),
+      colliderVisible: this.mesh.isVisible,
+      anchorEnabled: this.visualAnchor.isEnabled(),
+      childMeshes: this.visualAnchor.getChildMeshes().length,
+    });
+    this.mesh.setEnabled(true);
+    this.visualAnchor.setEnabled(true);
+    this.visualAnchor.getChildMeshes().forEach(m => {
+      m.setEnabled(true);
+      m.isVisible = true;
+      m.visibility = 1.0;
+      m.renderingGroupId = 1;
+    });
   }
 
   /**
@@ -641,35 +777,52 @@ export class PlayerController {
   private updateAnimation(): void {
     if (!this.isLoaded) return;
 
+    const vel = this.aggregate.body.getLinearVelocity();
+    const horizSpeed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
     let targetAnim: AnimationGroup | null = null;
-    let wantDust = false;
 
     if (!this.isGrounded()) {
       targetAnim = this.animFall;
     } else {
-      const vel = this.aggregate.body.getLinearVelocity();
-      const horizSpeed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
-
-      if (horizSpeed > 0.1) {
+      if (horizSpeed > 0.5) {
         targetAnim = this.animRun;
-        wantDust = true;
+        // Effet de poussière sous les pieds
+        if (this.vfxFrameCount++ % 10 === 0) {
+          const feetPosition = this.mesh.position.clone();
+          feetPosition.y -= 1.0;
+          VFXSystem.emit(this.scene, feetPosition, this.currentLevelTheme);
+        }
       } else {
         targetAnim = this.animIdle;
       }
-    }
 
-    // Pilotage particules
-    if (this.dustSystem) {
-      this.dustSystem.emitRate = wantDust ? 20 : 0;
-    }
-
-    // On ne stoppe et on ne trigger le play que s'il y a un changement d'état (anti play cumulatifs)
-    if (targetAnim && targetAnim !== this.currentAnim) {
-      if (this.currentAnim) {
-        this.currentAnim.stop();
+      // Freinage brutal
+      const deceleration = this.lastSpeed - horizSpeed;
+      if (this.inputX === 0 && this.inputZ === 0 && deceleration > 10) {
+        if (this.animBrake) targetAnim = this.animBrake;
       }
+    }
+
+    this.lastSpeed = horizSpeed;
+
+    // Lancer l'animation si elle change
+    if (targetAnim && targetAnim !== this.currentAnim) {
+      if (this.currentAnim) this.currentAnim.stop();
       targetAnim.play(true);
       this.currentAnim = targetAnim;
+    }
+
+    // LE FIX CRITIQUE : Calibrer la vitesse des pieds sur la vélocité
+    if (this.currentAnim && this.currentAnim === this.animRun) {
+      // 5.0 correspond au MOVE_SPEED de base.
+      // Si on va plus vite (tapis roulant), les pieds bougent plus vite !
+      this.currentAnim.speedRatio = horizSpeed / 5.0;
+    }
+
+    // ACTIVATION DES PARTICULES (EFFET DE PIEDS)
+    // On émet 30 particules/sec quand on court, 0 sinon.
+    if (this.dustSystem) {
+      this.dustSystem.emitRate = (this.currentAnim === this.animRun && horizSpeed > 1.0) ? 30 : 0;
     }
   }
 

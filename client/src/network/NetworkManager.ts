@@ -7,6 +7,9 @@ import {
   Mesh,
   PBRMaterial,
   Color3,
+  SceneLoader,
+  TransformNode,
+  AnimationGroup,
 } from "@babylonjs/core";
 
 /**
@@ -15,9 +18,14 @@ import {
  * et le Lerp/Slerp dans updateRemotePlayers() fait la transition fluide.
  */
 interface RemotePlayer {
-  mesh:           Mesh;
+  mesh: Mesh;
   targetPosition: Vector3;
   targetRotation: Quaternion;
+  lastPosition: Vector3;
+  animIdle?: AnimationGroup;
+  animRun?: AnimationGroup;
+  animFall?: AnimationGroup;
+  currentAnim?: AnimationGroup;
 }
 
 /**
@@ -40,13 +48,13 @@ export class NetworkManager {
 
   // ─── Interpolation ──────────────────────────────────────
   /** Coefficient de Lerp/Slerp par frame — 0.15 = mouvement fluide à 60fps */
-  private static readonly LERP_FACTOR   = 0.15;
+  private static readonly LERP_FACTOR = 0.15;
   /** Si distance > SNAP_DISTANCE → position directe, pas de Lerp (respawn distant) */
   private static readonly SNAP_DISTANCE = 5;
 
   // ─── Throttle d'envoi ───────────────────────────────────
   /** Intervalle minimum entre deux envois de transform (ms) — max 20 msg/sec */
-  private static readonly SEND_INTERVAL  = 50;
+  private static readonly SEND_INTERVAL = 50;
   /** Seuil de distance minimum pour déclencher un envoi (unités) */
   private static readonly SEND_THRESHOLD = 0.05;
 
@@ -55,9 +63,16 @@ export class NetworkManager {
   public room: Room | null = null;
   private remotePlayers: Map<string, RemotePlayer> = new Map();
 
-  public onQualified: (isLocal: boolean, rank: number) => void = () => {};
-  public onStatusChange: (status: string) => void = () => {};
-  public onCountdownChange: (count: number) => void = () => {};
+  public onQualified: (isLocal: boolean, rank: number) => void = () => { };
+  public onStatusChange: (status: string) => void = () => { };
+  public onCountdownChange: (count: number) => void = () => { };
+  public onGameOver: (winners: string[]) => void = () => { };
+  public onLevelChange: (levelName: string) => void = () => { };
+  public onResetLevel: () => void = () => { };
+  public onVotesChange: (votes: Record<string, number>) => void = () => { };
+  public onScoresChange: (scores: Record<string, number>) => void = () => {};
+  public onRemainingTimeChange: (time: number) => void = () => {};
+  public onScoreChange: (score: number) => void = () => {};
 
   /** Dernière position envoyée au serveur — pour le seuil de distance */
   private lastSentPosition: Vector3 = Vector3.Zero();
@@ -68,8 +83,23 @@ export class NetworkManager {
     this.scene = scene;
   }
 
-  // ─── Connexion ─────────────────────────────────────────
+  public sendReadyState(): void {
+    if (!this.room) return;
+    console.log('🟦 [NET] Sending ready state to server');
+    this.room.send("ready");
+  }
 
+  public sendEliminate(): void {
+    if (!this.room) return;
+    this.room.send("eliminate");
+  }
+
+  public sendCollect(): void {
+    if (!this.room) return;
+    this.room.send("collect");
+  }
+
+  // ─── Connexion ─────────────────────────────────────────
   /**
    * Tente de se connecter au serveur Colyseus.
    * Si le serveur est indisponible, le jeu continue en mode solo.
@@ -78,17 +108,18 @@ export class NetworkManager {
    */
   async connect(): Promise<void> {
     try {
+      console.log(`🟦 [NET] Connecting to ${NetworkManager.SERVER_URL} (room: game_room)…`);
       const client = new Client(NetworkManager.SERVER_URL);
       this.room = await client.joinOrCreate("game_room");
 
       console.log(
-        `🌐 Connected to server — sessionId: ${this.room.sessionId}`
+        `🟩 [NET] Connected — sessionId: ${this.room.sessionId}`
       );
 
       this.setupStateListeners();
     } catch (error) {
       console.warn(
-        "⚠️ Could not connect to server — Mode Solo activé",
+        "🟨 [NET] Could not connect — Mode Solo activé",
         error
       );
       // Le jeu continue normalement sans réseau.
@@ -120,9 +151,45 @@ export class NetworkManager {
 
     room.state.listen("status", (newStatus: string) => {
       this.onStatusChange(newStatus);
+      console.log('🟦 [NET] status:', newStatus);
+      if (newStatus === "FINISHED") {
+        const winners = Array.from(room.state.winners as unknown as Iterable<string>);
+        this.onGameOver(winners);
+      }
     });
     room.state.listen("countdown", (newCount: number) => {
       this.onCountdownChange(newCount);
+    });
+    room.state.listen("currentLevel", (newLevel: string) => {
+      this.onLevelChange(newLevel);
+    });
+
+    // Écouter les votes de tous les joueurs (Sprint 18)
+    const updateVotes = () => {
+      const votes: Record<string, number> = {};
+      room.state.players.forEach((p: { votedLevel?: string }) => {
+        if (p.votedLevel) {
+          votes[p.votedLevel] = (votes[p.votedLevel] || 0) + 1;
+        }
+      });
+      this.onVotesChange(votes);
+    };
+
+    room.onMessage("reset_level", () => {
+      this.onResetLevel();
+    });
+
+    // Écouter les scores globaux (Sprint 21)
+    const updateScores = () => {
+      const scores: Record<string, number> = {};
+      room.state.globalScores.forEach((value: number, key: string) => { scores[key] = value; });
+      this.onScoresChange(scores);
+    };
+    room.state.globalScores.onAdd(() => updateScores());
+    room.state.globalScores.onChange(() => updateScores());
+
+    room.state.listen("remainingTime", (newTime: number) => {
+      this.onRemainingTimeChange(newTime);
     });
 
     room.state.winners.onAdd((sessionId: string, index: number) => {
@@ -132,13 +199,18 @@ export class NetworkManager {
 
     // ─ Nouveau joueur ──────────────────────────────────
     room.state.players.onAdd((player: any, sessionId: string) => {
-      // Ignorer le joueur LOCAL — sa capsule cyan est gérée
-      // par PlayerController, pas par le réseau.
+      // Listeners communs (Local + Remote)
+      player.listen("roundScore", (val: number) => {
+        if (sessionId === room.sessionId) this.onScoreChange(val);
+      });
+      player.listen("votedLevel", () => updateVotes());
+
+      // Ignorer le joueur LOCAL pour la suite (capsule 3D)
       if (sessionId === room.sessionId) return;
 
       console.log(`👤 Remote player joined: ${sessionId}`);
 
-      // ─ Création du mesh ──────────────────────────────
+      // ─ Création du collider mesh (invisible) ──────────────────────────────
       const mesh = MeshBuilder.CreateCapsule(
         `remote_${sessionId}`,
         {
@@ -150,33 +222,61 @@ export class NetworkManager {
         },
         this.scene
       );
+      mesh.isVisible = false; // Le collider est invisible
 
       // Position initiale reçue du serveur
       mesh.position = new Vector3(player.x, player.y, player.z);
 
       // ⚠️ CRITIQUE — initialiser rotationQuaternion (null par défaut)
-      // Sans cette ligne, le premier SlerpToRef crashe.
       mesh.rotationQuaternion = new Quaternion(
         player.rx, player.ry, player.rz, player.rw
       );
 
-      // Matériau PBR ORANGE — distingue visuellement les
-      // joueurs distants du joueur local (cyan)
-      const mat = new PBRMaterial(
-        `mat_remote_${sessionId}`,
-        this.scene
-      );
-      mat.albedoColor   = new Color3(1.0, 0.55, 0.0);  // orange vif
-      mat.metallic      = 0.2;
-      mat.roughness     = 0.5;
-      mat.emissiveColor = new Color3(0.15, 0.08, 0.0);  // lueur chaude
-      mesh.material = mat;
+      // ─ Ancre visuelle (Taille Minion) ──────────────────
+      const visualAnchor = new TransformNode(`anchor_${sessionId}`, this.scene);
+      visualAnchor.parent = mesh;
+      visualAnchor.scaling.setAll(0.08);
+
+      // ─ Chargement du modèle Minion (HVGirl) ─────────────
+      SceneLoader.ImportMeshAsync(null, "https://models.babylonjs.com/", "HVGirl.glb", this.scene).then((result) => {
+        const root = result.meshes[0];
+        root.parent = visualAnchor;
+        root.rotation.y = Math.PI; // Faire face à Z+
+
+        // Coloriser pour différencier les joueurs
+        const hue = (parseInt(sessionId.substring(0, 4), 16) % 360);
+        const mat = new PBRMaterial(`mat_remote_${sessionId}`, this.scene);
+        mat.albedoColor = Color3.FromHSV(hue, 0.8, 1);
+        mat.metallic = 0.2;
+        mat.roughness = 0.4;
+        
+        result.meshes.forEach(m => {
+          if (m.name.includes("Head") || m.name.includes("Body") || m.name.includes("Arm")) {
+             (m as Mesh).material = mat;
+          }
+          m.renderingGroupId = 1;
+        });
+
+        // Animations de base
+        const idle = result.animationGroups.find(ag => ag.name === 'Idle');
+        if (idle) idle.play(true);
+
+        const rp = this.remotePlayers.get(sessionId);
+        if (rp) {
+            rp.animIdle = result.animationGroups.find(ag => ag.name === 'Idle') || undefined;
+            rp.animRun = result.animationGroups.find(ag => ag.name === 'Run') || undefined;
+            rp.animFall = result.animationGroups.find(ag => (ag.name === 'Fall' || ag.name === 'Falling')) || undefined;
+            rp.currentAnim = rp.animIdle;
+            if (rp.currentAnim) rp.currentAnim.play(true);
+        }
+      });
 
       // ─ Structure RemotePlayer avec targets ────────────
       const remote: RemotePlayer = {
         mesh,
         targetPosition: new Vector3(player.x, player.y, player.z),
         targetRotation: new Quaternion(player.rx, player.ry, player.rz, player.rw),
+        lastPosition: new Vector3(player.x, player.y, player.z),
       };
       this.remotePlayers.set(sessionId, remote);
 
@@ -210,6 +310,21 @@ export class NetworkManager {
       player.listen("rw", (val: number) => {
         const rp = this.remotePlayers.get(sessionId);
         if (rp) rp.targetRotation.w = val;
+      });
+
+      player.listen("votedLevel", () => {
+        updateVotes();
+      });
+
+      // Déclencher un update initial si le joueur a déjà voté
+      if (player.votedLevel) updateVotes();
+    });
+
+    // IMPORTANT : Également écouter le joueur LOCAL pour ses propres votes
+    room.state.players.onAdd((player: any, sessionId: string) => {
+      if (sessionId !== room.sessionId) return;
+      player.listen("votedLevel", () => {
+        updateVotes();
       });
     });
 
@@ -296,6 +411,28 @@ export class NetworkManager {
           remote.mesh.rotationQuaternion
         );
       }
+
+      // ─ ANIMATIONS (Sync visuelle) ────────────────────
+      // Calcul de la vitesse réelle (distance parcourue ce frame)
+      const moveDistance = Vector3.Distance(remote.lastPosition, remote.mesh.position);
+      const velocityY = remote.mesh.position.y - remote.lastPosition.y;
+      remote.lastPosition.copyFrom(remote.mesh.position);
+
+      let targetAnim = remote.animIdle;
+
+      // Logique simple d'état
+      if (velocityY < -0.05) {
+          targetAnim = remote.animFall;
+      } else if (moveDistance > 0.01) {
+          targetAnim = remote.animRun;
+      }
+
+      // Transition fluide si l'animation change
+      if (targetAnim && targetAnim !== remote.currentAnim) {
+          remote.currentAnim?.stop();
+          remote.currentAnim = targetAnim;
+          remote.currentAnim.play(true);
+      }
     }
   }
 
@@ -331,9 +468,9 @@ export class NetworkManager {
     if (distance < NetworkManager.SEND_THRESHOLD) return;
 
     this.room.send("transform", {
-      x:  position.x,
-      y:  position.y,
-      z:  position.z,
+      x: position.x,
+      y: position.y,
+      z: position.z,
       rx: rotation ? rotation.x : 0,
       ry: rotation ? rotation.y : 0,
       rz: rotation ? rotation.z : 0,
@@ -342,6 +479,16 @@ export class NetworkManager {
 
     this.lastSentPosition.copyFrom(position);
     this.lastSendTime = now;
+  }
+
+  sendVote(levelId: string): void {
+    if (!this.room) return;
+    this.room.send("vote_level", { level: levelId });
+  }
+
+  sendForceLobby(): void {
+    if (!this.room) return;
+    this.room.send("force_lobby");
   }
 
   // ─── Nettoyage ─────────────────────────────────────────
