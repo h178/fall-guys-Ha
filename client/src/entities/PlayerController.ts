@@ -71,7 +71,7 @@ export class PlayerController {
   private aggregate: PhysicsAggregate;
 
   /** Point de réapparition. Cloné au constructeur pour éviter les mutations. */
-  private readonly spawnPoint: Vector3;
+  public spawnPoint: Vector3;
 
   /**
    * Vrai pendant la séquence de respawn (disablePreStep toggling).

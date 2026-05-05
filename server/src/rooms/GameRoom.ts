@@ -184,7 +184,7 @@ export class GameRoom extends Room<GameState> {
     }
     
     const level = GameRoom.LEVELS[this.currentLevelIndex];
-    this.state.remainingTime = 180; // Unifié : 3 minutes pour tous les niveaux
+    this.state.remainingTime = 120; // Unifié : 2 minutes (120 secondes)
     
     this.state.currentLevel = level.name;
     this.state.status = "STARTING";

@@ -219,6 +219,12 @@ export class UIManager {
   }
 
   // ─── Countdown ─────────────────────────────────────────────
+  
+  public showCountdown(): void {
+    this.btnReady.style.display = 'none';
+    this.levelGrid.style.display = 'none';
+    this.txtCountdown.innerText = "ATTENTE...";
+  }
 
   public updateCountdown(val: number): void {
     // Masquer le bouton PRÊT et la grille dès que le décompte commence

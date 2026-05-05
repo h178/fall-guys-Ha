@@ -61,6 +61,10 @@ export class GameLevel {
   private scene:       Scene;
   private config:      LevelConfig;
   private player:      PlayerController | null = null;
+  // ─── Web Audio (musique procédurale) ──────────────────────────────
+  private audioCtx:    AudioContext | null      = null;
+  private beatInterval: ReturnType<typeof setInterval> | null = null;
+  private beatBpm:     number                  = 128;
   private obstacles:   IObstacle[]             = [];
   private hammers:     RotatingHammer[]        = [];
   private network:     NetworkManager | null   = null;
@@ -146,7 +150,7 @@ export class GameLevel {
     this.network.onLevelChange = (newLevel) => {
         console.log(`🟦 [GAME] Niveau changé via vote : ${newLevel}`);
         this.reloadLevel(newLevel);
-        this.player?.respawn();
+        this.alignPlayerOnGrid(); // MAJ au lieu de simple respawn
     };
 
     this.network.onStatusChange = (status) => {
@@ -164,11 +168,19 @@ export class GameLevel {
 
             if (this.player) {
                 this.player.isQualified = false;
-                this.player.respawn();
+                this.alignPlayerOnGrid(); // MAJ au lieu de simple respawn
                 this.player.setInputEnabled(false);
             }
         }
+        if (status === "STARTING" && this.state !== GameState.STARTING) {
+            this.state = GameState.STARTING;
+            this.ui?.showCountdown();
+            this.beatBpm = 128;
+            this.startBeat(); // 🎵 Lancer la musique procédurale
+            this.alignPlayerOnGrid();
+        }
         if (status === "PLAYING") {
+            this.beatBpm = 128; // Retour BPM normal au GO!
             // Afficher "GO!" pendant 1 seconde avant de cacher le lobby
             if (this.ui) {
                 this.ui.hideReadyButton();
@@ -181,6 +193,7 @@ export class GameLevel {
             this.startGame(); 
         }
         if (status === "FINISHED") {
+            this.stopBeat(); // 🔇 Arrêt de la musique
             this.player?.setInputEnabled(false);
         }
     };
@@ -188,6 +201,8 @@ export class GameLevel {
     this.network.onCountdownChange = (count) => {
         if (count > 0) {
             this.ui?.updateCountdown(count);
+            // Le beat s'accélère pendant le compte à rebours (128 → 180 BPM)
+            this.beatBpm = 128 + (5 - count) * 13;
         }
     };
 
@@ -204,6 +219,13 @@ export class GameLevel {
         const sessionId = this.network?.room?.sessionId;
         if (!sessionId) return;
         this.ui?.showGameOver(winners, sessionId);
+    };
+
+    this.network.onPlayersListChange = () => {
+        const serverStatus = this.network?.room?.state?.status;
+        if (serverStatus === "WAITING" || serverStatus === "STARTING") {
+            this.alignPlayerOnGrid();
+        }
     };
 
     this.network.connect(); // Lancer la connexion Colyseus
@@ -454,6 +476,118 @@ export class GameLevel {
     mat.alpha         = 0.35;
     mat.emissiveColor = new Color3(0.3, 0.25, 0.0);
     this.finishZone.material = mat;
+  }
+
+  // ─── Musique procédurale Web Audio ────────────────────────────────────
+
+  /**
+   * Génère un kick drum synthétique via WebAudio.
+   * Pas de fichier audio requis — 100% garanti de fonctionner !
+   */
+  private playKick(): void {
+    if (!this.audioCtx) return;
+    const ctx = this.audioCtx;
+    const now = ctx.currentTime;
+
+    // Oscillateur de basse fréquence (kick)
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.exponentialRampToValueAtTime(0.01, now + 0.3);
+    gain.gain.setValueAtTime(1.0, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+    osc.start(now);
+    osc.stop(now + 0.4);
+  }
+
+  /** Génère un hi-hat synthétique */
+  private playHihat(): void {
+    if (!this.audioCtx) return;
+    const ctx = this.audioCtx;
+    const now = ctx.currentTime;
+
+    const bufferSize = ctx.sampleRate * 0.05;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 7000;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    source.start(now);
+  }
+
+  /** Lance le beat en boucle avec le BPM courant */
+  private startBeat(): void {
+    // AudioContext doit être créé après un geste utilisateur (bouton PRÊT)
+    if (!this.audioCtx) {
+      this.audioCtx = new AudioContext();
+    }
+    if (this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume();
+    }
+
+    this.stopBeat(); // Sécurité : stoppe l'ancien intervalle si existant
+
+    let tick = 0;
+    const schedule = () => {
+      const msPerBeat = 60000 / this.beatBpm;
+      this.playKick();
+      if (tick % 2 === 1) this.playHihat(); // Hi-hat sur les temps pairs
+      tick++;
+
+      // Re-schedule avec le BPM mis à jour (pour l'accélération)
+      this.beatInterval = setTimeout(schedule, msPerBeat);
+    };
+    schedule();
+  }
+
+  /** Arrête le beat */
+  private stopBeat(): void {
+    if (this.beatInterval !== null) {
+      clearTimeout(this.beatInterval);
+      this.beatInterval = null;
+    }
+  }
+
+
+  private alignPlayerOnGrid(): void {
+    if (!this.player || !this.network?.room) return;
+
+    // Récupérer et trier les IDs pour avoir un index déterministe (le même pour tous)
+    const sessionIds = Array.from(this.network.room.state.players.keys());
+    sessionIds.sort(); 
+    
+    const myIndex = sessionIds.indexOf(this.network.room.sessionId);
+    if (myIndex === -1) return;
+
+    // Grille de départ : 4 joueurs par ligne, espacés de 2 unités
+    const cols = 4;
+    const col = myIndex % cols;
+    const row = Math.floor(myIndex / cols);
+
+    const offsetX = (col - (cols - 1) / 2) * 2; // Centre la ligne autour de X=0
+    const offsetZ = -row * 2; // Les lignes s'empilent vers l'arrière (Z-)
+
+    const baseSpawn = this.config.spawnPoint;
+    // On met à jour le spawnPoint officiel de l'instance locale
+    this.player.spawnPoint = new Vector3(baseSpawn.x + offsetX, baseSpawn.y, baseSpawn.z + offsetZ);
+    this.player.respawn(); // Téléportation immédiate sur la grille
   }
 
   // ─── Machine à états ─────────────────────────────────────────────────

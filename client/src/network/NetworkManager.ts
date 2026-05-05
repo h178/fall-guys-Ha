@@ -73,6 +73,7 @@ export class NetworkManager {
   public onScoresChange: (scores: Record<string, number>) => void = () => {};
   public onRemainingTimeChange: (time: number) => void = () => {};
   public onScoreChange: (score: number) => void = () => {};
+  public onPlayersListChange: () => void = () => {};
 
   /** Dernière position envoyée au serveur — pour le seuil de distance */
   private lastSentPosition: Vector3 = Vector3.Zero();
@@ -199,6 +200,8 @@ export class NetworkManager {
 
     // ─ Nouveau joueur ──────────────────────────────────
     room.state.players.onAdd((player: any, sessionId: string) => {
+      this.onPlayersListChange(); // MAJ LIGNE DE DÉPART
+
       // Listeners communs (Local + Remote)
       player.listen("roundScore", (val: number) => {
         if (sessionId === room.sessionId) this.onScoreChange(val);
@@ -330,6 +333,7 @@ export class NetworkManager {
 
     // ─ Joueur déconnecté ───────────────────────────────
     room.state.players.onRemove((_player: any, sessionId: string) => {
+      this.onPlayersListChange();
       console.log(`👋 Remote player left: ${sessionId}`);
       const remote = this.remotePlayers.get(sessionId);
       if (remote) {
