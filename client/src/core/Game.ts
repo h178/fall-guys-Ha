@@ -6,6 +6,7 @@ import {
   HemisphericLight,
   DirectionalLight,
   ShadowGenerator,
+  CascadedShadowGenerator,
   Color3,
 } from '@babylonjs/core';
 import HavokPhysics from '@babylonjs/havok';
@@ -23,7 +24,8 @@ export class Game {
   private scene: Scene;
   private canvas: HTMLCanvasElement;
   private camera: ArcRotateCamera | null = null;
-  private shadowGenerator: ShadowGenerator | null = null;
+  private shadowGenerator: CascadedShadowGenerator | null = null;
+  private sun: DirectionalLight | null = null;
 
   constructor(canvasId: string) {
     const element = document.getElementById(canvasId);
@@ -94,16 +96,21 @@ export class Game {
    * GameLevel y enregistre les shadow casters (meshes qui projettent).
    */
   setupLight(): void {
+    console.log('🟦 [LIGHT] setupLight()');
     // ─ Lumière ambiante (ciel violet → sol orange doux) ─────────────
     const ambient = new HemisphericLight(
       'ambientLight',
       new Vector3(0, 1, 0),
       this.scene
     );
-    ambient.intensity = 0.45;
+    ambient.intensity = 0.95;
     ambient.diffuse = new Color3(0.70, 0.68, 1.00);  // violet clair
     ambient.groundColor = new Color3(0.30, 0.20, 0.10);  // ocre chaud
     ambient.specular = Color3.Black();
+    console.log('🟩 [LIGHT] HemisphericLight', {
+      intensity: ambient.intensity,
+      direction: ambient.direction?.toString?.() ?? '(n/a)',
+    });
 
     // ─ Lumière directionnelle (soleil) ───────────────────────────────
     const sun = new DirectionalLight(
@@ -116,6 +123,11 @@ export class Game {
     sun.specular = new Color3(0.50, 0.48, 0.44);
     // Positionner la source loin pour les ombres
     sun.position = new Vector3(20, 40, 20);
+    console.log('🟩 [LIGHT] DirectionalLight', {
+      intensity: sun.intensity,
+      direction: sun.direction.toString(),
+      position: sun.position.toString(),
+    });
 
     // ─ Frustum orthographique manuel ─────────────────────────────────
     // Par défaut, autoUpdateExtends = true → Babylon calcule le frustum
@@ -138,20 +150,43 @@ export class Game {
     sun.shadowMinZ = 1;
     sun.shadowMaxZ = 100;
 
-    // ─ Shadow Generator PCF Soft ──────────────────────────────────────
-    // mapSize 2048 : bonne qualité sans exploser la VRAM
-    // usePercentageCloserFiltering : ombres douces (pas en créneau)
-    this.shadowGenerator = new ShadowGenerator(2048, sun);
-    this.shadowGenerator.usePercentageCloserFiltering = true;
-    this.shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
-    this.shadowGenerator.bias = 0.001;
+    // ─ Shadow Generator (CSM - Cascaded Shadow Map) ────────────────
+    const csm = new CascadedShadowGenerator(2048, sun);
+    csm.usePercentageCloserFiltering = true;
+    csm.filteringQuality = ShadowGenerator.QUALITY_HIGH;
+    csm.stabilizeCascades = true;
+    csm.lambda = 0.7;
+    csm.shadowMaxZ = 100;
+    
+    this.shadowGenerator = csm;
+    this.sun = sun;
+    console.log('🟩 [LIGHT] CascadedShadowGenerator ready');
+
+    // ─ Environment Helper (IBL - Image Based Lighting) ──────────
+    // Indispensable pour que les matériaux PBR (Minions, Métal)
+    // aient des reflets réalistes du ciel.
+    this.scene.createDefaultEnvironment({
+      createGround: false,
+      createSkybox: false, // On gère notre propre Skybox dans MaterialSystem
+      setupImageProcessing: false, // On gère le pipeline manuellement
+    });
+    if (this.scene.environmentTexture) {
+      this.scene.environmentTexture.level = 1.0;
+    }
+  }
+
+  public updateShadowFrustum(maxZ: number): void {
+    if (!this.sun) return;
+    // Note: CSM gère ses propres cascades, on ajuste juste le frustum global du soleil
+    this.sun.orthoTop = maxZ + 10;
+    this.sun.orthoBottom = -10;
   }
 
   /**
    * Expose le ShadowGenerator pour que GameLevel enregistre
    * les shadow casters (joueur, marteau arm).
    */
-  getShadowGenerator(): ShadowGenerator | null {
+  getShadowGenerator(): CascadedShadowGenerator | null {
     return this.shadowGenerator;
   }
 

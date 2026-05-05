@@ -11,10 +11,12 @@ import {
   Mesh,
   ParticleSystem,
   DynamicTexture,
+  Texture,
   Color4,
   DefaultRenderingPipeline,
 } from '@babylonjs/core';
 import { PlayerController } from '../entities/PlayerController';
+import { Game } from '../core/Game';
 import type { IObstacle } from '../entities/obstacles/IObstacle';
 import { RotatingHammer } from '../entities/obstacles/RotatingHammer';
 import { BouncyMushroom } from '../entities/obstacles/BouncyMushroom';
@@ -22,11 +24,21 @@ import { RotatingLily } from '../entities/obstacles/RotatingLily';
 import { Seesaw } from '../entities/obstacles/Seesaw';
 import { PendulumVine } from '../entities/obstacles/PendulumVine';
 import { RotarySweeper } from '../entities/obstacles/RotarySweeper';
+import { JumpPad } from '../entities/obstacles/JumpPad';
+import { SlidingWall } from '../entities/obstacles/SlidingWall';
+import { TrapTile } from '../entities/obstacles/TrapTile';
 import { MaterialSystem } from '../core/MaterialSystem';
 import { NetworkManager } from '../network/NetworkManager';
 import { UIManager } from '../ui/UIManager';
 import { GameState } from '../core/GameState';
-import { type LevelConfig, LEVEL_JUNGLE } from './LevelConfig';
+import { type LevelConfig, LEVEL_JUNGLE, LEVEL_SPACE, LEVEL_PARK, LEVEL_ICE } from './LevelConfig';
+
+const LEVEL_MAP: Record<string, LevelConfig> = {
+  jungle: LEVEL_JUNGLE,
+  space:  LEVEL_SPACE,
+  park:   LEVEL_PARK,
+  ice:    LEVEL_ICE,
+};
 
 /**
  * Gestionnaire de contenu du niveau FG.
@@ -57,10 +69,16 @@ export class GameLevel {
   private ui:          UIManager | null        = null;
   private decorativeGround: Mesh | null        = null;
   private vegetationMeshes: Mesh[]             = [];
+  private collectibles: Mesh[]                 = [];
 
   // ─── Machine à états ────────────────────────────────────────────────
   private state:       GameState = GameState.MENU;
   private elapsedTime: number    = 0;
+
+  // ─── Setup Context (V1.7) ───────────────────────────────────────────
+  private lastCamera: ArcRotateCamera | null = null;
+  private lastShadowGenerator: ShadowGenerator | null = null;
+  private lastGame: Game | null = null;
 
   constructor(scene: Scene, config: LevelConfig = LEVEL_JUNGLE) {
     this.scene  = scene;
@@ -73,7 +91,7 @@ export class GameLevel {
    * Initialise tout le contenu du niveau.
    * Appelé UNE SEULE FOIS depuis main.ts après initPhysics() et setupCamera().
    */
-  setup(camera: ArcRotateCamera, shadowGenerator: ShadowGenerator | null = null): void {
+  setup(camera: ArcRotateCamera, shadowGenerator: ShadowGenerator | null = null, game?: Game): void {
     MaterialSystem.applyThemeSkyColor(this.scene, this.config);
 
     // Appliquer la gravité de la config
@@ -81,85 +99,144 @@ export class GameLevel {
     this.scene.getPhysicsEngine()!.setGravity(new Vector3(g.x, g.y, g.z));
 
     this.ui = new UIManager();
+    console.log('🟦 [LEVEL] UIManager ready', Date.now());
 
-    this.createPlatforms(shadowGenerator);
-    this.createDecorativeGround();
-    if (this.config.theme === 'jungle') this.createVegetation();
-    this.createPlayer(camera, shadowGenerator);
-    this.createObstacles(shadowGenerator);
+    // ─ Post-Processing Pipeline (Sprint 25) ──────────────────────
+    const pipeline = new DefaultRenderingPipeline("defaultPipeline", true, this.scene, [camera]);
+    pipeline.samples = 4; // MSAA 4x
+    pipeline.fxaaEnabled = true;
+    pipeline.bloomEnabled = true;
+    pipeline.bloomThreshold = 0.8;
+    pipeline.bloomWeight = 0.3;
     
-    if (this.config.theme === 'space') {
-        const pipeline = new DefaultRenderingPipeline("defaultPipeline", true, this.scene, [camera]);
-        pipeline.bloomEnabled = true;
-        pipeline.bloomThreshold = 0.5;
-        pipeline.bloomWeight = 0.4;
-        pipeline.bloomKernel = 64;
-        pipeline.bloomScale = 0.5;
-    }
+    // SSAO 2 (Ombres de contact) - nécessite SSAO2RenderingPipeline séparé
+    // pipeline.ssaoEnabled = true;
+    // pipeline.ssaoRatio = 0.5;
+    
+    // Tone Mapping (ACES)
+    pipeline.imageProcessingEnabled = true;
+    pipeline.imageProcessing.toneMappingEnabled = true;
+    pipeline.imageProcessing.toneMappingType = 1; // ACES
 
-    this.createFinishLine();
-    this.registerGameEvents();
-    this.registerUpdateLoop();
+    this.lastCamera = camera;
+    this.lastShadowGenerator = shadowGenerator;
+    this.lastGame = game ?? null;
 
-    // ─ Réseau (connexion async non bloquante) ───────────────────────
+    // ─ Réseau (Cœur de la synchro) ──────────────────────────────────
     this.network = new NetworkManager(this.scene);
     
-    // S'assurer que le joueur est bloqué au début
-    this.player?.setInputEnabled(false);
+    this.network.onResetLevel = () => {
+        // Forcer la reconstruction complète des meshes pour réinitialiser les pièges (TrapTiles, etc.)
+        const sLevel = this.network?.room?.state?.currentLevel || this.config.theme;
+        this.reloadLevel(sLevel);
+        
+        // S'assurer que le joueur est bien remis au spawn
+        this.player?.respawn();
+    };
 
-    this.ui?.onReadyClicked(() => {
-      this.network?.room?.send("ready");
-    });
+    this.network.onVotesChange = (votes) => {
+        this.ui?.updateVotes(votes);
+    };
 
-    this.network?.room?.onMessage("reset_level", () => {
-       this.player?.respawn(); // Reset natif parfait via Havok
-    });
+    this.network.onScoresChange = (scores) => {
+        const localId = this.network?.room?.sessionId || "";
+        this.ui?.updateLeaderboard(scores, localId);
+    };
+
+    this.network.onLevelChange = (newLevel) => {
+        console.log(`🟦 [GAME] Niveau changé via vote : ${newLevel}`);
+        this.reloadLevel(newLevel);
+        this.player?.respawn();
+    };
 
     this.network.onStatusChange = (status) => {
-       if (status === "STARTING") {
-          // Optionnel : un son ou effet
-       }
-       if (status === "PLAYING") {
-          this.ui?.hideLobby(); // Sécurité
-          this.player?.setInputEnabled(true);
-       }
-       if (status === "FINISHED") {
-          this.player?.setInputEnabled(false);
-          if (this.network?.room) {
-            const winnersArr = Array.from(this.network.room.state.winners) as string[];
-            if (winnersArr.includes(this.network.room.sessionId)) {
-              this.ui?.showGameOver(winnersArr, this.network.room.sessionId);
-            } else {
-              this.ui?.showEliminated();
+        if (status === "WAITING") {
+            this.ui?.hideMenu();   // ← CRITIQUE : cacher le menu pour débloquer le lobby
+            this.ui?.showLobby();
+            
+            // Check rotation de niveau (V1.7)
+            const newLevel = this.network?.room?.state?.currentLevel;
+            if (newLevel && LEVEL_MAP[newLevel] && newLevel !== this.config.theme) {
+              console.log(`🔄 [LEVEL] Rotating to ${newLevel}`);
+              this.reloadLevel(newLevel);
+              return;
             }
-          }
-       }
-       if (status === "WAITING") {
-          this.ui?.showLobby();
-          if (this.player) {
-              this.player.isQualified = false;
-              this.player.respawn();
-              this.player.setInputEnabled(false);
-          }
-          // (Assurer que le texte redevienne blanc après l'écran rouge d'élimination)
-          const txt = document.getElementById('txt-countdown');
-          if (txt) txt.style.color = 'white';
-       }
+
+            if (this.player) {
+                this.player.isQualified = false;
+                this.player.respawn();
+                this.player.setInputEnabled(false);
+            }
+        }
+        if (status === "PLAYING") {
+            // Afficher "GO!" pendant 1 seconde avant de cacher le lobby
+            if (this.ui) {
+                this.ui.hideReadyButton();
+                const txt = document.getElementById('txt-countdown');
+                if (txt) txt.innerText = "GO!";
+                setTimeout(() => {
+                    this.ui?.hideLobby();
+                }, 1000);
+            }
+            this.startGame(); 
+        }
+        if (status === "FINISHED") {
+            this.player?.setInputEnabled(false);
+        }
     };
-    
+
     this.network.onCountdownChange = (count) => {
-       this.ui?.updateCountdown(count);
+        if (count > 0) {
+            this.ui?.updateCountdown(count);
+        }
     };
 
     this.network.onQualified = (isLocal, rank) => {
-       if (isLocal) {
-         this.ui?.showQualified(rank);
-         // Ajouter l'effet confettis ici en option
-         this.launchConfetti();
-         this.player?.setInputEnabled(false); 
-       }
+        if (isLocal) {
+            this.player!.isQualified = true;
+            this.ui?.showQualified(rank);
+            this.launchConfetti();
+            this.player?.setInputEnabled(false);
+        }
     };
-    this.network.connect();
+
+    this.network.onGameOver = (winners) => {
+        const sessionId = this.network?.room?.sessionId;
+        if (!sessionId) return;
+        this.ui?.showGameOver(winners, sessionId);
+    };
+
+    this.network.connect(); // Lancer la connexion Colyseus
+
+    // Construction du contenu initial (Tâche 1 - BuildScene)
+    this.buildScene(camera, shadowGenerator);
+
+    this.registerGameEvents();
+    this.registerUpdateLoop();
+
+    // État initial (Local)
+    this.state = GameState.MENU;
+    this.player?.setInputEnabled(false);
+  }
+
+  private buildScene(camera: ArcRotateCamera, shadowGenerator: ShadowGenerator | null): void {
+    const maxZ = Math.max(...this.config.platforms.map(p => p.z + p.depth / 2));
+    if (this.lastGame) this.lastGame.updateShadowFrustum(maxZ);
+
+    this.createPlatforms(shadowGenerator);
+    this.createDecorativeGround();
+    this.createObstacles(shadowGenerator);
+    if (this.config.theme === 'jungle') this.createVegetation();
+    this.createPlayer(camera, shadowGenerator);
+
+    if (this.config.mode === 'race') {
+      this.createFinishLine();
+    } else if (this.config.mode === 'collect') {
+      this.createCollectibles(shadowGenerator);
+    }
+
+    // Particules environnementales (Sprint 25)
+    this.spawnParticles();
   }
 
   // ─── Création du contenu ─────────────────────────────────────────────
@@ -174,22 +251,35 @@ export class GameLevel {
    *  - freezeWorldMatrix via MaterialSystem.apply(..., true)
    */
   private createPlatforms(shadowGenerator: ShadowGenerator | null): void {
-    const groundMat = this.config.theme === 'space'
-      ? MaterialSystem.createSpacePlatformMaterial(this.scene)
-      : MaterialSystem.createGroundMaterial(this.scene);
+    const groundMat = MaterialSystem.getThemeMaterial(this.scene, this.config.theme, 'platform');
 
     for (const cfg of this.config.platforms) {
-      const platform = MeshBuilder.CreateGround(
-        `platform_${cfg.name}`,
-        { width: cfg.width, height: cfg.depth },
-        this.scene
-      );
-      platform.position = new Vector3(cfg.x, 0, cfg.z);
+      let platform: Mesh;
+      let shapeType: PhysicsShapeType;
 
-      // Corps statique : mass:0 → non affecté par la gravité Havok
+      // Détection des plateformes sphériques "modernes"
+      if (cfg.name.includes('sphere')) {
+        platform = MeshBuilder.CreateSphere(
+          `platform_${cfg.name}`,
+          { diameterX: cfg.width, diameterY: 4, diameterZ: cfg.depth, segments: 32 },
+          this.scene
+        );
+        // On la descend un peu pour que le sommet soit à Y=0
+        platform.position = new Vector3(cfg.x, -2, cfg.z);
+        shapeType = PhysicsShapeType.SPHERE;
+      } else {
+        platform = MeshBuilder.CreateGround(
+          `platform_${cfg.name}`,
+          { width: cfg.width, height: cfg.depth },
+          this.scene
+        );
+        platform.position = new Vector3(cfg.x, 0, cfg.z);
+        shapeType = PhysicsShapeType.BOX;
+      }
+
       new PhysicsAggregate(
         platform,
-        PhysicsShapeType.BOX,
+        shapeType,
         { mass: 0 },
         this.scene
       );
@@ -207,9 +297,18 @@ export class GameLevel {
    * inputEnabled reste false jusqu'au clic JOUER (état MENU).
    */
   private createPlayer(camera: ArcRotateCamera, shadowGenerator: ShadowGenerator | null): void {
-    // Spawn = centre de la plateforme "spawn" (Z=0, X=0) à Y=2 → retombe via gravité Havok
     this.player = new PlayerController(this.scene, camera, new Vector3(0, 2, 0));
+    // setThemePhysics() configure isOnIce, currentLevelTheme et tout profil futur
+    this.player.setThemePhysics(this.config.theme);
     shadowGenerator?.addShadowCaster(this.player.getMesh(), false);
+    console.log('🟩 [PLAYER INIT] Position:', this.player.getMesh().position.toString());
+    console.log('🟩 [CAM] After player create', {
+      alpha: camera.alpha,
+      beta: camera.beta,
+      radius: camera.radius,
+      target: camera.target.toString(),
+    });
+    this.player.forceVisualSanity();
     // N.B. : inputEnabled = false par défaut dans PlayerController
   }
 
@@ -225,7 +324,7 @@ export class GameLevel {
       this.scene
     );
     this.decorativeGround.position.y = -0.5;
-    const mat = MaterialSystem.createGroundMaterial(this.scene);
+    const mat = MaterialSystem.getThemeMaterial(this.scene, this.config.theme, 'ground');
     this.decorativeGround.material = mat;
     this.decorativeGround.receiveShadows = true;
     this.decorativeGround.freezeWorldMatrix();
@@ -307,22 +406,28 @@ export class GameLevel {
     const { obstacles } = this.config;
 
     for (const def of obstacles) {
+      let obstacle: IObstacle | null = null;
       const pos = new Vector3(def.position.x, def.position.y, def.position.z);
       switch (def.type) {
         case 'hammer': {
           const h = new RotatingHammer(this.scene, pos);
-          this.obstacles.push(h);
           this.hammers.push(h);
+          obstacle = h;
           shadowGenerator?.addShadowCaster(h.getArmMesh(), false);
           shadowGenerator?.addShadowCaster(h.getPillarMesh(), false);
           break;
         }
-        case 'lily':     this.obstacles.push(new RotatingLily(this.scene, pos)); break;
-        case 'mushroom': this.obstacles.push(new BouncyMushroom(this.scene, pos)); break;
-        case 'seesaw':   this.obstacles.push(new Seesaw(this.scene, pos)); break;
-        case 'pendulum': this.obstacles.push(new PendulumVine(this.scene, pos)); break;
-        case 'sweeper':  this.obstacles.push(new RotarySweeper(this.scene, pos)); break;
+        case 'lily':        obstacle = new RotatingLily(this.scene, pos); break;
+        case 'mushroom':    obstacle = new BouncyMushroom(this.scene, pos); break;
+        case 'seesaw':      obstacle = new Seesaw(this.scene, pos); break;
+        case 'pendulum':    obstacle = new PendulumVine(this.scene, pos); break;
+        case 'sweeper':     obstacle = new RotarySweeper(this.scene, pos); break;
+        case 'jumppad':     obstacle = new JumpPad(this.scene, pos); break;
+        case 'slidingwall': obstacle = new SlidingWall(this.scene, pos); break;
+        case 'traptile':    obstacle = new TrapTile(this.scene, pos, this.config.theme); break;
+        default: console.warn(`[GameLevel] Unknown obstacle type: "${def.type}"`);
       }
+      if (obstacle) this.obstacles.push(obstacle);
     }
   }
 
@@ -357,11 +462,64 @@ export class GameLevel {
    * Enregistre les callbacks UI → états du jeu.
    * Le bouton JOUER n'est actif que depuis l'état MENU.
    */
-  private registerGameEvents(): void {
+   private registerGameEvents(): void {
+    console.log('🟦 [UI] registerGameEvents() wiring');
     this.ui?.onPlayClicked(() => {
       if (this.state !== GameState.MENU) return;
-      this.startGame();
+      this.ui?.showLobby();
+      this.ui?.hideMenu();
     });
+
+    this.ui?.onReadyClicked(() => {
+        console.log('🟩 [UI] Ready callback (GameLevel)');
+        try {
+          const room = this.network?.room;
+          if (!room) {
+            console.error('🟥 [NETWORK] room undefined au clic PRÊT');
+            return;
+          }
+          room.send("ready");
+          console.log('🟩 [NETWORK] Message ready envoyé au serveur');
+        } catch (e) {
+          console.error('🟥 [NETWORK] Erreur lors de l\'envoi de ready:', e);
+        }
+    });
+
+    if (this.ui) {
+      this.ui.onVoteCallback = (levelId) => {
+        console.log(`🟩 [UI] Vote pour ${levelId}`);
+        this.network?.sendVote(levelId);
+      };
+
+      this.ui.onForceLobbyCallback = () => {
+        this.network?.sendForceLobby();
+      };
+    }
+
+    this.ui?.onReplayClicked(() => {
+        this.network?.room?.send("replay");
+    });
+
+    if (this.player) {
+      this.player.currentMode = this.config.mode;
+      this.player.onEliminated = () => {
+        this.network?.sendEliminate();
+        this.ui?.showEliminated();
+      };
+    }
+
+    if (this.network) {
+      this.network.onRemainingTimeChange = (time) => {
+        if (this.config.mode === 'survival') {
+          this.ui?.updateSurvivalTimer(time);
+        } else {
+          this.ui?.updateGlobalTimer(time);
+        }
+      };
+      this.network.onScoreChange = (score) => {
+        if (this.config.mode === 'collect') this.ui?.updateScore(score, this.config.targetScore || 5);
+      };
+    }
   }
 
   /**
@@ -431,9 +589,22 @@ export class GameLevel {
           );
         }
 
+        // ─ MODE COLLECT : Détection objets ──────────────────────
+        if (this.config.mode === 'collect') {
+          for (let i = this.collectibles.length - 1; i >= 0; i--) {
+            const c = this.collectibles[i];
+            if (this.player?.mesh.intersectsMesh(c, false)) {
+              this.network?.sendCollect();
+              c.dispose();
+              this.collectibles.splice(i, 1);
+              // Repop aléatoire pour garder le niveau vivant
+              this.spawnOneCollectible(this.lastShadowGenerator);
+            }
+          }
+        }
+
         // Détection ligne d'arrivée via AABB (intersectsMesh, pas de physique)
-        // false = pas de précision au triangle — AABB suffit et est O(1)
-        if (this.finishZone && this.player?.mesh.intersectsMesh(this.finishZone, false)) {
+        if (this.config.mode === 'race' && this.finishZone && this.player?.mesh.intersectsMesh(this.finishZone, false)) {
           if (this.network && !this.player.isQualified) {
             this.player.isQualified = true; // flag local anti spam
             if (this.network.room) {
@@ -445,10 +616,82 @@ export class GameLevel {
     });
   }
 
+  private createCollectibles(shadowGenerator: ShadowGenerator | null): void {
+    const count = 8;
+    for (let i = 0; i < count; i++) {
+      this.spawnOneCollectible(shadowGenerator);
+    }
+  }
+
+  private spawnOneCollectible(shadowGenerator: ShadowGenerator | null): void {
+    const star = MeshBuilder.CreatePolyhedron("star", { type: 1, size: 0.5 }, this.scene);
+    const mat = new StandardMaterial("starMat", this.scene);
+    mat.emissiveColor = new Color3(1, 0.8, 0);
+    star.material = mat;
+
+    // Position sur une plateforme au hasard (sauf spawn)
+    const platIdx = Math.floor(Math.random() * (this.config.platforms.length - 1)) + 1;
+    const plat = this.config.platforms[platIdx];
+    // Marge de sécurité pour ne pas mettre les étoiles au bord du précipice
+    const marginX = plat.width > 4 ? 4 : 2;
+    const marginZ = plat.depth > 4 ? 4 : 2;
+    
+    star.position.set(
+      plat.x + (Math.random() - 0.5) * (plat.width - marginX),
+      1.5,
+      plat.z + (Math.random() - 0.5) * (plat.depth - marginZ)
+    );
+
+    // Animation de rotation
+    this.scene.onBeforeRenderObservable.add(() => {
+      star.rotation.y += 0.05;
+    });
+
+    shadowGenerator?.addShadowCaster(star);
+    this.collectibles.push(star);
+  }
+
+  private spawnParticles(): void {
+    if (this.config.theme === 'ice') {
+      // Tempête de neige
+      const snow = new ParticleSystem("snow", 1000, this.scene);
+      snow.particleTexture = new Texture("https://playground.babylonjs.com/textures/flare.png", this.scene);
+      snow.emitter = new Vector3(0, 15, 25);
+      snow.minEmitBox = new Vector3(-20, 0, -30);
+      snow.maxEmitBox = new Vector3(20, 0, 30);
+      snow.color1 = new Color4(1, 1, 1, 0.8);
+      snow.minSize = 0.1;
+      snow.maxSize = 0.3;
+      snow.minLifeTime = 2;
+      snow.maxLifeTime = 5;
+      snow.emitRate = 200;
+      snow.gravity = new Vector3(0, -1, 0);
+      snow.direction1 = new Vector3(-1, -1, -1);
+      snow.direction2 = new Vector3(1, -1, 1);
+      snow.start();
+    } else if (this.config.theme === 'jungle') {
+      // Lucioles
+      const flies = new ParticleSystem("flies", 100, this.scene);
+      flies.particleTexture = new Texture("https://playground.babylonjs.com/textures/flare.png", this.scene);
+      flies.emitter = new Vector3(0, 5, 20);
+      flies.minEmitBox = new Vector3(-15, -5, -20);
+      flies.maxEmitBox = new Vector3(15, 5, 20);
+      flies.color1 = new Color4(0.8, 1, 0.2, 0.8);
+      flies.minSize = 0.05;
+      flies.maxSize = 0.1;
+      flies.emitRate = 20;
+      flies.start();
+    }
+  }
+
   // ─── Nettoyage ──────────────────────────────────────────────────────
 
   dispose(): void {
     this.network?.dispose();
+    this.clearSceneMeshes();
+  }
+
+  private clearSceneMeshes(): void {
     this.player?.dispose();
     for (const obstacle of this.obstacles) {
       obstacle.dispose();
@@ -460,6 +703,29 @@ export class GameLevel {
     this.decorativeGround?.dispose();
     for (const mesh of this.vegetationMeshes) {
       mesh.dispose();
+    }
+    for (const c of this.collectibles) {
+      c.dispose();
+    }
+    this.collectibles = [];
+    this.vegetationMeshes = [];
+    this.platforms = [];
+    this.obstacles = [];
+    this.hammers = [];
+  }
+
+  public reloadLevel(levelName: string): void {
+    console.log(`🔃 [LEVEL] Reloading to ${levelName}...`);
+    this.clearSceneMeshes();
+    this.config = LEVEL_MAP[levelName] || LEVEL_JUNGLE;
+    
+    if (this.lastCamera) {
+        // Mettre à jour la couleur du ciel et la gravité
+        MaterialSystem.applyThemeSkyColor(this.scene, this.config);
+        const g = this.config.gravity;
+        this.scene.getPhysicsEngine()!.setGravity(new Vector3(g.x, g.y, g.z));
+        // Reconstruire uniquement les meshes
+        this.buildScene(this.lastCamera, this.lastShadowGenerator);
     }
   }
   private launchConfetti(): void {
