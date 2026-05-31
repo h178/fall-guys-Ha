@@ -26,6 +26,10 @@ export class UIManager {
   private leaderboardPanel: HTMLDivElement;
   private btnReplay: HTMLButtonElement;
 
+  // Écran d'accueil contextuel
+  private introOverlay: HTMLElement;
+  private closeIntroBtn: HTMLElement;
+
   public onVoteCallback?: (levelId: string) => void;
   public onForceLobbyCallback?: () => void;
 
@@ -141,6 +145,30 @@ export class UIManager {
         window.location.href = window.location.pathname; 
       }, 100);
     };
+
+    // --- Écran d'accueil contextuel (Intro) ---
+    this.introOverlay = document.getElementById('intro-overlay')!;
+    this.closeIntroBtn = document.getElementById('btn-close-intro')!;
+
+    if (this.introOverlay && this.closeIntroBtn) {
+      this.closeIntroBtn.onclick = () => {
+        this.hideIntro();
+      };
+    }
+  }
+
+  // ─── Écran d'accueil contextuel ───────────────────────────────────
+
+  public showIntro(): void {
+    if (this.introOverlay) {
+      this.introOverlay.style.display = 'flex';
+    }
+  }
+
+  public hideIntro(): void {
+    if (this.introOverlay) {
+      this.introOverlay.style.display = 'none';
+    }
   }
 
   // ─── Lobby ─────────────────────────────────────────────────

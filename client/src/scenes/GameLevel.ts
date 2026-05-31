@@ -105,6 +105,9 @@ export class GameLevel {
     this.ui = new UIManager();
     console.log('🟦 [LEVEL] UIManager ready', Date.now());
 
+    // Afficher l'écran d'accueil contextuel au démarrage
+    this.ui.showIntro();
+
     // ─ Post-Processing Pipeline (Sprint 25) ──────────────────────
     const pipeline = new DefaultRenderingPipeline("defaultPipeline", true, this.scene, [camera]);
     pipeline.samples = 4; // MSAA 4x

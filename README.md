@@ -9,8 +9,8 @@ J'ai développé ce jeu multijoueur compétitif en 3D inspiré de Fall Guys en t
 - **Yassine HATTABI** (Développement complet : Gameplay, Architecture Réseau, Intégration 3D et Moteur Physique)
 
 ## 🎥 Vidéo & Jouabilité
-- **Vidéo de Présentation :** *(La vidéo sera uploadée demain sur YouTube, le lien final sera inséré ici)*
-- **Jouer en Ligne :** *(En cours de déploiement. En attendant, les instructions pour le faire tourner en local parfaitement sont à la fin de ce fichier)*
+- **Vidéo de Présentation :** https://youtube.com/watch?v=[À REMPLACER PAR VOTRE VIDÉO YOUTUBE]
+- **Jouer en Ligne :** https://ia-edition-game.vercel.app/ *(Lien de déploiement - sera actif après le déploiement Vercel)*
 
 ## 🧠 Respect du Thème "IA Edition"
 Pour moi, l'IA Edition a pris un sens très littéral et concret. L'Intelligence Artificielle n'a pas seulement été un thème, mais un véritable **coéquipier de développement**. J'ai utilisé des assistants IA en pair-programming pour concevoir des architectures complexes (synchronisation réseau à faible latence, résolution de conflits avec le moteur physique). 

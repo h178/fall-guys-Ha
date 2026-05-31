@@ -70,10 +70,10 @@ export class NetworkManager {
   public onLevelChange: (levelName: string) => void = () => { };
   public onResetLevel: () => void = () => { };
   public onVotesChange: (votes: Record<string, number>) => void = () => { };
-  public onScoresChange: (scores: Record<string, number>) => void = () => {};
-  public onRemainingTimeChange: (time: number) => void = () => {};
-  public onScoreChange: (score: number) => void = () => {};
-  public onPlayersListChange: () => void = () => {};
+  public onScoresChange: (scores: Record<string, number>) => void = () => { };
+  public onRemainingTimeChange: (time: number) => void = () => { };
+  public onScoreChange: (score: number) => void = () => { };
+  public onPlayersListChange: () => void = () => { };
 
   /** Dernière position envoyée au serveur — pour le seuil de distance */
   private lastSentPosition: Vector3 = Vector3.Zero();
@@ -252,10 +252,10 @@ export class NetworkManager {
         mat.albedoColor = Color3.FromHSV(hue, 0.8, 1);
         mat.metallic = 0.2;
         mat.roughness = 0.4;
-        
+
         result.meshes.forEach(m => {
           if (m.name.includes("Head") || m.name.includes("Body") || m.name.includes("Arm")) {
-             (m as Mesh).material = mat;
+            (m as Mesh).material = mat;
           }
           m.renderingGroupId = 1;
         });
@@ -266,11 +266,11 @@ export class NetworkManager {
 
         const rp = this.remotePlayers.get(sessionId);
         if (rp) {
-            rp.animIdle = result.animationGroups.find(ag => ag.name === 'Idle') || undefined;
-            rp.animRun = result.animationGroups.find(ag => ag.name === 'Run') || undefined;
-            rp.animFall = result.animationGroups.find(ag => (ag.name === 'Fall' || ag.name === 'Falling')) || undefined;
-            rp.currentAnim = rp.animIdle;
-            if (rp.currentAnim) rp.currentAnim.play(true);
+          rp.animIdle = result.animationGroups.find(ag => ag.name === 'Idle') || undefined;
+          rp.animRun = result.animationGroups.find(ag => ag.name === 'Run') || undefined;
+          rp.animFall = result.animationGroups.find(ag => (ag.name === 'Fall' || ag.name === 'Falling')) || undefined;
+          rp.currentAnim = rp.animIdle;
+          if (rp.currentAnim) rp.currentAnim.play(true);
         }
       });
 
@@ -426,16 +426,16 @@ export class NetworkManager {
 
       // Logique simple d'état
       if (velocityY < -0.05) {
-          targetAnim = remote.animFall;
+        targetAnim = remote.animFall;
       } else if (moveDistance > 0.01) {
-          targetAnim = remote.animRun;
+        targetAnim = remote.animRun;
       }
 
       // Transition fluide si l'animation change
       if (targetAnim && targetAnim !== remote.currentAnim) {
-          remote.currentAnim?.stop();
-          remote.currentAnim = targetAnim;
-          remote.currentAnim.play(true);
+        remote.currentAnim?.stop();
+        remote.currentAnim = targetAnim;
+        remote.currentAnim.play(true);
       }
     }
   }

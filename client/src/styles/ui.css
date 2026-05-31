@@ -163,3 +163,127 @@
 #victory-message.visible {
   transform: translate(-50%, -50%) scale(1);
 }
+
+/* ─── Écran d'Accueil Contextuel ─────────────────────────────────── */
+#intro-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;
+  background: linear-gradient(135deg, rgba(10, 5, 30, 0.95) 0%, rgba(124, 77, 255, 0.85) 100%);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.close-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 50px;
+  height: 50px;
+  font-size: 2rem;
+  font-weight: bold;
+  color: var(--fg-white);
+  background: rgba(255, 92, 138, 0.8);
+  border: 3px solid var(--fg-white);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: all 0.3s ease;
+  font-family: 'Fredoka One', cursive;
+  padding: 0;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  background: var(--fg-pink);
+  transform: scale(1.1) rotate(90deg);
+  box-shadow: 0 0 20px rgba(255, 92, 138, 0.6);
+}
+
+.intro-content {
+  background: rgba(255, 255, 255, 0.1);
+  border: 3px solid var(--fg-cyan);
+  border-radius: 20px;
+  padding: 40px;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+  color: var(--fg-white);
+  box-shadow: 0 0 30px rgba(0, 229, 255, 0.3);
+}
+
+.intro-content h2 {
+  font-size: 2.5rem;
+  color: var(--fg-yellow);
+  text-align: center;
+  margin: 0 0 20px 0;
+  text-shadow: 0 0 15px rgba(255, 214, 0, 0.5);
+  letter-spacing: 2px;
+}
+
+.intro-text {
+  font-size: 1.1rem;
+  line-height: 1.8;
+}
+
+.intro-text p {
+  margin: 15px 0;
+}
+
+.intro-text strong {
+  color: var(--fg-cyan);
+}
+
+.intro-text ul {
+  list-style: none;
+  padding: 0;
+  margin: 15px 0;
+}
+
+.intro-text li {
+  padding: 8px 0;
+  padding-left: 25px;
+  position: relative;
+}
+
+.intro-text li:before {
+  content: "▸";
+  position: absolute;
+  left: 0;
+  color: var(--fg-yellow);
+  font-size: 1.2rem;
+}
+
+.ia-note {
+  background: rgba(255, 214, 0, 0.2);
+  border-left: 4px solid var(--fg-yellow);
+  padding: 15px;
+  border-radius: 0 10px 10px 0;
+  margin-top: 20px;
+  font-size: 1rem;
+}
+
+.click-hint {
+  text-align: center;
+  margin-top: 25px;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
