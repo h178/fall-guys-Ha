@@ -1,5 +1,5 @@
 {
-  "name": "fg-server",
+  "name": "ia-edition-game-server",
   "version": "1.0.0",
   "description": "FG — Colyseus multiplayer server",
   "main": "dist/index.js",
