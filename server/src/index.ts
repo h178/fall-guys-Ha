@@ -28,4 +28,5 @@ gameServer.define("game_room", GameRoom);
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Colyseus server listening on http://localhost:${PORT}`);
+  // Build v2 — all handlers registered: finish, transform, ready, vote, customize, emote, replay, force_lobby, eliminate
 });
