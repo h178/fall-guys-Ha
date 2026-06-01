@@ -33,12 +33,13 @@ export class GameRoom extends Room<GameState> {
 
     // ─ Message handler : finish ────────────────────────────
     this.onMessage("finish", (client) => {
+      if (this.state.status !== "PLAYING") return;
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
 
       // Validation côté serveur dynamique selon le niveau
       const levelInfo = GameRoom.LEVELS[this.currentLevelIndex];
-      if (player.z < levelInfo.finishZ - 12) {
+      if (player.z < levelInfo.finishZ - 15) {
         console.warn(`Anti-cheat: ${client.sessionId} trop loin (Z=${player.z}, need ${levelInfo.finishZ})`);
         return;
       }
@@ -199,6 +200,10 @@ export class GameRoom extends Room<GameState> {
   onLeave(client: Client): void {
     console.log(`➖ Player left: ${client.sessionId}`);
     this.state.players.delete(client.sessionId);
+    if (this.startReadyTimeout) {
+      this.startReadyTimeout.clear();
+      this.startReadyTimeout = null;
+    }
   }
 
   onDispose(): void {
@@ -207,6 +212,9 @@ export class GameRoom extends Room<GameState> {
 
   // ─── Décompte & Transition ────────────────────────────────
   private startCountdown(): void {
+    // Sécurité : ne pas démarrer si la room est vide
+    if (this.state.players.size === 0) return;
+
     // Résoudre le vote : niveau avec le plus de voix (fallback = rotation)
     const votes: Record<string, number> = {};
     this.state.players.forEach(p => {
