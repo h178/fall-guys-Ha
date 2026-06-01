@@ -40,4 +40,5 @@ export class GameState extends Schema {
   @type("string") currentLevel: string = "jungle";
   @type("number") remainingTime: number = 0;
   @type({ map: "number" }) globalScores = new MapSchema<number>();
+  @type({ map: "number" }) votes = new MapSchema<number>();
 }

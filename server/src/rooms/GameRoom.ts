@@ -39,7 +39,7 @@ export class GameRoom extends Room<GameState> {
 
       // Validation côté serveur dynamique selon le niveau
       const levelInfo = GameRoom.LEVELS[this.currentLevelIndex];
-      if (player.z < levelInfo.finishZ - 15) {
+      if (player.z < levelInfo.finishZ - 12) {
         console.warn(`Anti-cheat: ${client.sessionId} trop loin (Z=${player.z}, need ${levelInfo.finishZ})`);
         return;
       }
@@ -47,13 +47,20 @@ export class GameRoom extends Room<GameState> {
       if (!this.state.winners.includes(client.sessionId)) {
         this.state.winners.push(client.sessionId);
         
-        // Attribution des points : 1 point par victoire (Sprint 26)
+        // Attribution des points : 1 point par victoire
         const currentScore = this.state.globalScores.get(client.sessionId) || 0;
         this.state.globalScores.set(client.sessionId, currentScore + 1);
 
-        // Fin de la partie dès qu'on a un gagnant (Sprint 28)
-        if (this.roundTimer) this.roundTimer.clear();
-        this.endGame();
+        // Vérifier si on a atteint le quota de gagnants ou si tous les joueurs en vie ont fini
+        const activePlayers = Array.from(this.state.players.values()).filter(p => !p.isEliminated).length;
+        const hasEnoughWinners = this.state.winners.length >= this.MAX_WINNERS;
+        const allActiveFinished = this.state.winners.length >= activePlayers;
+        
+        if (hasEnoughWinners || allActiveFinished) {
+          console.log(`🏁 Fin de manche: ${this.state.winners.length} gagnant(s) (quota=${this.MAX_WINNERS}, tous=${allActiveFinished})`);
+          if (this.roundTimer) this.roundTimer.clear();
+          this.endGame();
+        }
       }
     });
 
@@ -109,7 +116,10 @@ export class GameRoom extends Room<GameState> {
       if (!validLevels.includes(data.level)) return;
       
       const player = this.state.players.get(client.sessionId);
-      if (player) player.votedLevel = data.level;
+      if (player) {
+        player.votedLevel = data.level;
+        this.recalcVotes();
+      }
     });
 
     this.onMessage("customize", (client, data: { skinHue: number, costumeHue: number, hatStyle: string, gender?: string }) => {
@@ -281,6 +291,7 @@ export class GameRoom extends Room<GameState> {
     this.state.countdown = 0;
     this.state.winners.clear();
     this.replayVotes.clear();
+    this.state.votes.clear();
     
     this.state.players.forEach((p) => {
       p.isReady = false;
@@ -294,5 +305,16 @@ export class GameRoom extends Room<GameState> {
 
     this.state.remainingTime = 0;
     this.broadcast("reset_level");
+  }
+
+  /** Recalcule et synchronise les votes auprès de tous les clients. */
+  private recalcVotes(): void {
+    this.state.votes.clear();
+    this.state.players.forEach(p => {
+      if (p.votedLevel) {
+        const current = this.state.votes.get(p.votedLevel) || 0;
+        this.state.votes.set(p.votedLevel, current + 1);
+      }
+    });
   }
 }
