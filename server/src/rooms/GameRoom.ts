@@ -18,6 +18,7 @@ export class GameRoom extends Room<GameState> {
   private roundTimer: any = null;
   private gameTimeout: any = null;
   private replayVotes = new Set<string>();
+  private startReadyTimeout: any = null;
 
   private static readonly LEVELS = [
     { name: 'jungle', finishZ: 30, mode: 'race' }, // MAJ: Centré à 30
@@ -37,7 +38,7 @@ export class GameRoom extends Room<GameState> {
 
       // Validation côté serveur dynamique selon le niveau
       const levelInfo = GameRoom.LEVELS[this.currentLevelIndex];
-      if (player.z < levelInfo.finishZ - 8) {
+      if (player.z < levelInfo.finishZ - 12) {
         console.warn(`Anti-cheat: ${client.sessionId} trop loin (Z=${player.z}, need ${levelInfo.finishZ})`);
         return;
       }
@@ -87,8 +88,17 @@ export class GameRoom extends Room<GameState> {
         if (!p.isReady) allReady = false;
       });
 
-      if (allReady && this.state.players.size > 0) {
+      if (allReady && this.state.players.size >= 2) {
+        if (this.startReadyTimeout) { this.startReadyTimeout.clear(); this.startReadyTimeout = null; }
         this.startCountdown();
+      } else if (allReady && this.state.players.size > 0) {
+        // Watchdog: tous prêts mais un seul joueur → armer un départ différé
+        if (this.startReadyTimeout) this.startReadyTimeout.clear();
+        this.startReadyTimeout = this.clock.setTimeout(() => {
+          if (this.state.status === "WAITING") {
+            this.startCountdown();
+          }
+        }, 3000);
       }
     });
 
@@ -99,6 +109,36 @@ export class GameRoom extends Room<GameState> {
       
       const player = this.state.players.get(client.sessionId);
       if (player) player.votedLevel = data.level;
+    });
+
+    this.onMessage("customize", (client, data: { skinHue: number, costumeHue: number, hatStyle: string, gender?: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      // Validation basique
+      player.skinHue = Math.max(0, Math.min(360, data.skinHue));
+      player.costumeHue = Math.max(0, Math.min(360, data.costumeHue));
+      
+      const validHats = ["none", "cap", "crown", "beanie"];
+      if (validHats.includes(data.hatStyle)) {
+        player.hatStyle = data.hatStyle;
+      }
+      if (data.gender && (data.gender === 'male' || data.gender === 'female')) {
+        player.gender = data.gender;
+      }
+      
+      console.log(`🎨 Player ${client.sessionId} customized: skin=${player.skinHue}, hat=${player.hatStyle}`);
+    });
+
+    this.onMessage("emote", (client, data: { emote: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (player) {
+        player.emote = data.emote;
+        // Reset automatique après 3 secondes pour faire disparaître la bulle
+        this.clock.setTimeout(() => {
+          if (player.emote === data.emote) player.emote = "";
+        }, 3000);
+      }
     });
 
     this.onMessage("replay", (client) => {

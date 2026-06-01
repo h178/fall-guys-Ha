@@ -22,6 +22,13 @@ export class Player extends Schema {
   @type("string") votedLevel: string = "";
   @type("boolean") isEliminated: boolean = false;
   @type("number") roundScore: number = 0;
+
+  // ─ Customisation ─────────────────────────────────────
+  @type("float32") skinHue: number = 210; // Bleu par défaut
+  @type("float32") costumeHue: number = 35; // Orange par défaut
+  @type("string") hatStyle: string = "none"; // none, cap, crown, beanie
+  @type("string") emote: string = ""; // Emote courante (😊, 😂, etc.)
+  @type("string") gender: string = "female"; // 'female' | 'male'
 }
 
 export class GameState extends Schema {
