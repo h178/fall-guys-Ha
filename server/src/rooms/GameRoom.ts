@@ -30,6 +30,7 @@ export class GameRoom extends Room<GameState> {
 
   onCreate(): void {
     this.setState(new GameState());
+    console.log("🎮 [SERVER] GameRoom created — handlers: finish, transform, ready, vote, customize, emote, replay, force_lobby, eliminate");
 
     // ─ Message handler : finish ────────────────────────────
     this.onMessage("finish", (client) => {
