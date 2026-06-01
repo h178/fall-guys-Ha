@@ -1,0 +1,13 @@
+{
+  "name": "fall-guys-server",
+  "version": "1.0.0",
+  "description": "Railway root package.json — delegates to server/",
+  "main": "server/dist/index.js",
+  "scripts": {
+    "build": "cd server && npm install && npm run build",
+    "start": "cd server && node dist/index.js"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}
